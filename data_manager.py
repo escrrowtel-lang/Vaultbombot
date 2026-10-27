@@ -414,3 +414,35 @@ async def get_payment(pay_id: str) -> Optional[dict]:
 
 async def get_pending_payments() -> list:
     return [p for p in _load_payments().values() if p.get("status") == "pending"]
+
+# ─────────────────────────── Firebase Instances ───────────────────────────
+
+async def list_all_firebase() -> list:
+    """Return all firebase instances stored in admin_settings."""
+    d = await load_admin_data()
+    return d.get("firebase_list", [])
+
+async def add_firebase(name: str, url: str, password: str = "") -> dict:
+    """Add a new firebase instance. Returns the new entry."""
+    import time
+    d = await load_admin_data()
+    fb_list = d.get("firebase_list", [])
+    entry = {
+        "id":       f"fb_{int(time.time())}",
+        "name":     name.strip(),
+        "url":      url.strip().rstrip("/"),
+        "password": password.strip(),
+    }
+    fb_list.append(entry)
+    await set_admin_setting("firebase_list", fb_list)
+    return entry
+
+async def remove_firebase(fb_id: str) -> bool:
+    """Remove firebase instance by id. Returns True if removed."""
+    d = await load_admin_data()
+    fb_list = d.get("firebase_list", [])
+    new_list = [f for f in fb_list if f["id"] != fb_id]
+    if len(new_list) == len(fb_list):
+        return False
+    await set_admin_setting("firebase_list", new_list)
+    return True

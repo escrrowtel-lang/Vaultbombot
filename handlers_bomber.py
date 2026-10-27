@@ -3,7 +3,10 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 
-from data_manager import get_user, deduct_credits, load_admin_data, set_admin_setting, is_admin
+from data_manager import (
+    get_user, deduct_credits, load_admin_data, set_admin_setting, is_admin,
+    list_all_firebase, add_firebase, remove_firebase,
+)
 from bomber_service import run_api_bomb, run_custom_bomb
 from config import BOMBER_CREDITS_DEFAULT, BOMBER_QUANTITY_DEFAULT
 
@@ -28,7 +31,7 @@ async def get_bomber_settings() -> dict:
         "custom_bomb_credits": admin.get("custom_bomb_credits", BOMBER_CREDITS_DEFAULT["custom_bomb"]),
         "api_bomb_cycles":     admin.get("api_bomb_cycles",     BOMBER_QUANTITY_DEFAULT["api_bomb"]),
         "custom_bomb_count":   admin.get("custom_bomb_count",   BOMBER_QUANTITY_DEFAULT["custom_bomb"]),
-        "fast2sms_key":        admin.get("fast2sms_key",        None),
+        "firebase_list":       admin.get("firebase_list",       []),
     }
 
 def back_kb(target="menu_main", label="🏠 Main Menu"):
@@ -253,7 +256,7 @@ async def bomber_launch_custom(update: Update, context: ContextTypes.DEFAULT_TYP
     s = await get_bomber_settings()
     cost  = s["custom_bomb_credits"]
     count = s["custom_bomb_count"]
-    key   = s.get("fast2sms_key")
+    fb_list = s.get("firebase_list", [])
 
     success = await deduct_credits(user.id, cost, f"Custom Bomb → {phone}")
     if not success:
@@ -262,7 +265,7 @@ async def bomber_launch_custom(update: Update, context: ContextTypes.DEFAULT_TYP
 
     await safe_edit(query, f"✉️ <b>Sending...</b>\n\n📱 Target: <code>{phone}</code>\n📨 Messages: <code>{count}</code>\n\n<i>Please wait...</i>")
 
-    result = await run_custom_bomb(phone, message, count, api_key=key)
+    result = await run_custom_bomb(phone, message, count, firebase_list=fb_list)
     u = await __import__('data_manager').get_user(user.id)
 
     note = f"\n\n⚠️ <i>{result['note']}</i>" if result.get("note") else ""
@@ -286,25 +289,28 @@ async def admin_bomber_settings(update: Update, context: ContextTypes.DEFAULT_TY
     await query.answer()
 
     s = await get_bomber_settings()
+    fb_count = len(s.get("firebase_list", []))
     text = (
         f"💣 <b>BOMBER SETTINGS</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"⚡ <b>API Bomb</b>\n"
         f"  Credits per run: <code>{s['api_bomb_credits']}</code>\n"
         f"  Cycles per run:  <code>{s['api_bomb_cycles']}</code>\n\n"
-        f"✉️ <b>Custom Bomb</b>\n"
-        f"  Credits per run: <code>{s['custom_bomb_credits']}</code>\n"
-        f"  Messages per run:<code>{s['custom_bomb_count']}</code>\n\n"
-        f"🔑 SMS Key (fast2sms): <code>{'Set ✅' if s['fast2sms_key'] else 'Not set ❌'}</code>\n\n"
+        f"✉️ <b>Custom Bomb (Firebase)</b>\n"
+        f"  Credits per run:  <code>{s['custom_bomb_credits']}</code>\n"
+        f"  Messages per run: <code>{s['custom_bomb_count']}</code>\n"
+        f"  Firebase links:   <code>{fb_count}</code> configured\n\n"
         f"<i>Select what to change:</i>"
     )
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚡ API Credits",         callback_data="admin_set_api_bomb_credits")],
-        [InlineKeyboardButton("🔁 API Cycles",          callback_data="admin_set_api_bomb_cycles")],
-        [InlineKeyboardButton("✉️ Custom Credits",      callback_data="admin_set_custom_bomb_credits")],
-        [InlineKeyboardButton("📨 Custom Count",        callback_data="admin_set_custom_bomb_count")],
-        [InlineKeyboardButton("🔑 Set SMS API Key",     callback_data="admin_set_fast2sms_key")],
-        [InlineKeyboardButton("⬅️ Back",                callback_data="admin_panel")],
+        [InlineKeyboardButton("⚡ API Credits",          callback_data="admin_set_api_bomb_credits")],
+        [InlineKeyboardButton("🔁 API Cycles",           callback_data="admin_set_api_bomb_cycles")],
+        [InlineKeyboardButton("✉️ Custom Credits",       callback_data="admin_set_custom_bomb_credits")],
+        [InlineKeyboardButton("📨 Custom Count",         callback_data="admin_set_custom_bomb_count")],
+        [InlineKeyboardButton("🔥 Add Firebase",         callback_data="admin_firebase_add")],
+        [InlineKeyboardButton("📋 List Firebase",        callback_data="admin_firebase_list")],
+        [InlineKeyboardButton("🗑️ Remove Firebase",      callback_data="admin_firebase_remove")],
+        [InlineKeyboardButton("⬅️ Back",                 callback_data="admin_panel")],
     ])
     await safe_edit(query, text, kb)
 
@@ -318,7 +324,6 @@ async def admin_bomber_set_field(update: Update, context: ContextTypes.DEFAULT_T
         "admin_set_api_bomb_cycles":     ("admin_awaiting", "bomber_api_cycles",     "🔁 API Bomb cycles per run (number):"),
         "admin_set_custom_bomb_credits": ("admin_awaiting", "bomber_custom_credits", "✉️ Custom Bomb credits per run (number):"),
         "admin_set_custom_bomb_count":   ("admin_awaiting", "bomber_custom_count",   "📨 Custom Bomb message count per run (number):"),
-        "admin_set_fast2sms_key":        ("admin_awaiting", "bomber_sms_key",        "🔑 Enter fast2sms API key:"),
     }
     if query.data not in field_map:
         return
@@ -326,6 +331,56 @@ async def admin_bomber_set_field(update: Update, context: ContextTypes.DEFAULT_T
     key, awaiting_val, prompt = field_map[query.data]
     context.user_data[key] = awaiting_val
     await safe_edit(query, f"<b>{prompt}</b>\n\nType the value now:",
+        InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_bomber_settings")]]))
+
+# ─────────────────────────── Firebase Admin Handlers ───────────────────────────
+
+async def admin_firebase_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start add-firebase flow: ask for name first."""
+    query = update.callback_query
+    if not await is_admin(query.from_user.id): return
+    await query.answer()
+    context.user_data["admin_awaiting"] = "firebase_add_name"
+    await safe_edit(query,
+        "🔥 <b>Add Firebase Instance</b>\n\nStep 1/3 — Enter a <b>name/label</b> for this Firebase link (e.g. <i>Server1</i>):",
+        InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_bomber_settings")]]))
+
+async def admin_firebase_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List all configured Firebase instances."""
+    query = update.callback_query
+    if not await is_admin(query.from_user.id): return
+    await query.answer()
+
+    fb_list = await list_all_firebase()
+    if not fb_list:
+        await safe_edit(query, "📋 <b>No Firebase instances configured.</b>",
+            InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_bomber_settings")]]))
+        return
+
+    lines = []
+    for i, fb in enumerate(fb_list, 1):
+        lines.append(f"{i}. <b>{fb['name']}</b>\n   ID: <code>{fb['id']}</code>\n   URL: <code>{fb['url'][:50]}...</code>" if len(fb['url']) > 50 else f"{i}. <b>{fb['name']}</b>\n   ID: <code>{fb['id']}</code>\n   URL: <code>{fb['url']}</code>")
+
+    text = "📋 <b>Firebase Instances</b>\n━━━━━━━━━━━━━━━━━━━━━\n\n" + "\n\n".join(lines)
+    await safe_edit(query, text,
+        InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_bomber_settings")]]))
+
+async def admin_firebase_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start remove-firebase flow: show list with IDs."""
+    query = update.callback_query
+    if not await is_admin(query.from_user.id): return
+    await query.answer()
+
+    fb_list = await list_all_firebase()
+    if not fb_list:
+        await safe_edit(query, "📋 <b>No Firebase instances to remove.</b>",
+            InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_bomber_settings")]]))
+        return
+
+    context.user_data["admin_awaiting"] = "firebase_remove_id"
+    lines = [f"• <code>{fb['id']}</code> — {fb['name']}" for fb in fb_list]
+    text = "🗑️ <b>Remove Firebase</b>\n\nCopy and send the <b>ID</b> to remove:\n\n" + "\n".join(lines)
+    await safe_edit(query, text,
         InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_bomber_settings")]]))
 
 async def handle_admin_bomber_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -336,31 +391,84 @@ async def handle_admin_bomber_text(update: Update, context: ContextTypes.DEFAULT
     awaiting = context.user_data.get("admin_awaiting", "")
     val = update.message.text.strip()
 
-    field_map = {
-        "bomber_api_credits":    ("api_bomb_credits",    True),
-        "bomber_api_cycles":     ("api_bomb_cycles",     True),
-        "bomber_custom_credits": ("custom_bomb_credits", True),
-        "bomber_custom_count":   ("custom_bomb_count",   True),
-        "bomber_sms_key":        ("fast2sms_key",        False),
+    # ── Numeric bomber fields ──
+    num_field_map = {
+        "bomber_api_credits":    "api_bomb_credits",
+        "bomber_api_cycles":     "api_bomb_cycles",
+        "bomber_custom_credits": "custom_bomb_credits",
+        "bomber_custom_count":   "custom_bomb_count",
     }
-
-    if awaiting not in field_map:
-        return False
-
-    db_key, is_int = field_map[awaiting]
-    context.user_data.pop("admin_awaiting", None)
-
-    if is_int:
+    if awaiting in num_field_map:
+        db_key = num_field_map[awaiting]
+        context.user_data.pop("admin_awaiting", None)
         try:
             val = int(val)
         except ValueError:
             await update.message.reply_text("❌ Must be a number.")
             return True
+        await set_admin_setting(db_key, val)
+        await update.message.reply_text(
+            f"✅ <code>{db_key}</code> set to <code>{val}</code>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_bomber_settings")]])
+        )
+        return True
 
-    await set_admin_setting(db_key, val)
-    await update.message.reply_text(
-        f"✅ <code>{db_key}</code> set to <code>{val}</code>",
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_bomber_settings")]])
-    )
-    return True
+    # ── Firebase add flow ──
+    if awaiting == "firebase_add_name":
+        context.user_data["firebase_pending_name"] = val
+        context.user_data["admin_awaiting"] = "firebase_add_url"
+        await update.message.reply_text(
+            f"✅ Name: <b>{val}</b>\n\nStep 2/3 — Enter the <b>Firebase URL</b>\n(e.g. <code>https://my-project-default-rtdb.firebaseio.com</code>):",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_bomber_settings")]])
+        )
+        return True
+
+    if awaiting == "firebase_add_url":
+        context.user_data["firebase_pending_url"] = val
+        context.user_data["admin_awaiting"] = "firebase_add_password"
+        await update.message.reply_text(
+            f"✅ URL saved.\n\nStep 3/3 — Enter the <b>Firebase password/secret</b> (or send <code>none</code> if not required):",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_bomber_settings")]])
+        )
+        return True
+
+    if awaiting == "firebase_add_password":
+        name = context.user_data.pop("firebase_pending_name", "")
+        url  = context.user_data.pop("firebase_pending_url",  "")
+        password = "" if val.lower() == "none" else val
+        context.user_data.pop("admin_awaiting", None)
+
+        entry = await add_firebase(name, url, password)
+        await update.message.reply_text(
+            f"✅ <b>Firebase added!</b>\n\n"
+            f"Name: <code>{entry['name']}</code>\n"
+            f"ID:   <code>{entry['id']}</code>\n"
+            f"URL:  <code>{entry['url']}</code>\n"
+            f"Pass: <code>{'Set ✅' if entry['password'] else 'None'}</code>",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_bomber_settings")]])
+        )
+        return True
+
+    # ── Firebase remove flow ──
+    if awaiting == "firebase_remove_id":
+        context.user_data.pop("admin_awaiting", None)
+        removed = await remove_firebase(val)
+        if removed:
+            await update.message.reply_text(
+                f"✅ Firebase <code>{val}</code> removed.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_bomber_settings")]])
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ ID <code>{val}</code> not found.",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_bomber_settings")]])
+            )
+        return True
+
+    return False
