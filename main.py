@@ -84,7 +84,11 @@ async def handle_text_input(update: Update, context):
     awaiting = context.user_data.get("awaiting")
     admin_awaiting = context.user_data.get("admin_awaiting")
 
-    # Admin flows take priority
+    # Bomber admin flows take priority (firebase_add_*, firebase_remove_*, bomber_*)
+    if await handle_admin_bomber_text(update, context):
+        return
+
+    # General admin flows
     if admin_awaiting:
         await handle_admin_text(update, context)
         return
@@ -95,9 +99,6 @@ async def handle_text_input(update: Update, context):
         return
     elif awaiting == "bomber_message":
         await handle_bomber_message(update, context)
-        return
-
-    if await handle_admin_bomber_text(update, context):
         return
 
     if awaiting == "utr_input":

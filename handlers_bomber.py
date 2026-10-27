@@ -336,13 +336,16 @@ async def admin_bomber_set_field(update: Update, context: ContextTypes.DEFAULT_T
 # ─────────────────────────── Firebase Admin Handlers ───────────────────────────
 
 async def admin_firebase_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start add-firebase flow: ask for name first."""
+    """Start add-firebase flow: just paste URL."""
     query = update.callback_query
     if not await is_admin(query.from_user.id): return
     await query.answer()
-    context.user_data["admin_awaiting"] = "firebase_add_name"
+    context.user_data["admin_awaiting"] = "firebase_add_url"
     await safe_edit(query,
-        "🔥 <b>Add Firebase Instance</b>\n\nStep 1/3 — Enter a <b>name/label</b> for this Firebase link (e.g. <i>Server1</i>):",
+        "🔥 <b>Add Firebase Instance</b>\n\n"
+        "Paste the <b>Firebase URL</b> directly:\n"
+        "(e.g. <code>https://my-project-default-rtdb.firebaseio.com</code>)\n\n"
+        "<i>Name will be set automatically. No password required.</i>",
         InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_bomber_settings")]]))
 
 async def admin_firebase_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -416,38 +419,49 @@ async def handle_admin_bomber_text(update: Update, context: ContextTypes.DEFAULT
 
     # ── Firebase add flow ──
     if awaiting == "firebase_add_name":
-        context.user_data["firebase_pending_name"] = val
+        # Legacy state — treat input as URL directly
         context.user_data["admin_awaiting"] = "firebase_add_url"
-        await update.message.reply_text(
-            f"✅ Name: <b>{val}</b>\n\nStep 2/3 — Enter the <b>Firebase URL</b>\n(e.g. <code>https://my-project-default-rtdb.firebaseio.com</code>):",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_bomber_settings")]])
-        )
-        return True
+        # fall through to firebase_add_url handler below
 
-    if awaiting == "firebase_add_url":
-        context.user_data["firebase_pending_url"] = val
-        context.user_data["admin_awaiting"] = "firebase_add_password"
+    if awaiting in ("firebase_add_url", "firebase_add_name"):
+        url = val.strip().rstrip("/")
+        if not url.startswith("http"):
+            await update.message.reply_text(
+                "❌ Invalid URL. Must start with <code>https://</code>\n\nPaste the full Firebase URL:",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_bomber_settings")]])
+            )
+            context.user_data["admin_awaiting"] = "firebase_add_url"
+            return True
+
+        # Auto-generate name: Server1, Server2, etc.
+        existing = await list_all_firebase()
+        auto_name = f"Server{len(existing) + 1}"
+
+        context.user_data.pop("admin_awaiting", None)
+        entry = await add_firebase(auto_name, url, "")
         await update.message.reply_text(
-            f"✅ URL saved.\n\nStep 3/3 — Enter the <b>Firebase password/secret</b> (or send <code>none</code> if not required):",
+            f"✅ <b>Firebase added!</b>\n\n"
+            f"Name: <code>{entry['name']}</code>\n"
+            f"ID:   <code>{entry['id']}</code>\n"
+            f"URL:  <code>{entry['url']}</code>",
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_bomber_settings")]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_bomber_settings")]])
         )
         return True
 
     if awaiting == "firebase_add_password":
-        name = context.user_data.pop("firebase_pending_name", "")
+        # Legacy fallback — shouldn't hit normally
+        name = context.user_data.pop("firebase_pending_name", "Server")
         url  = context.user_data.pop("firebase_pending_url",  "")
         password = "" if val.lower() == "none" else val
         context.user_data.pop("admin_awaiting", None)
-
         entry = await add_firebase(name, url, password)
         await update.message.reply_text(
             f"✅ <b>Firebase added!</b>\n\n"
             f"Name: <code>{entry['name']}</code>\n"
             f"ID:   <code>{entry['id']}</code>\n"
-            f"URL:  <code>{entry['url']}</code>\n"
-            f"Pass: <code>{'Set ✅' if entry['password'] else 'None'}</code>",
+            f"URL:  <code>{entry['url']}</code>",
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_bomber_settings")]])
         )
