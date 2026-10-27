@@ -28,8 +28,10 @@ from handlers_bomber import (
     menu_bomber, bomber_api_start, bomber_custom_start,
     bomber_launch_api, bomber_launch_custom,
     handle_bomber_phone, handle_bomber_message,
+    bomber_count_pick, handle_bomber_custom_count,
     admin_bomber_settings, admin_bomber_set_field, handle_admin_bomber_text,
     admin_firebase_add, admin_firebase_list, admin_firebase_remove,
+    admin_firebase_bulk_add,
 )
 from handlers_admin import (
     admin_command, admin_panel, admin_payment_setup,
@@ -100,6 +102,9 @@ async def handle_text_input(update: Update, context):
     elif awaiting == "bomber_message":
         await handle_bomber_message(update, context)
         return
+    elif awaiting == "bomber_custom_count_text":
+        await handle_bomber_custom_count(update, context)
+        return
 
     if awaiting == "utr_input":
         await handle_utr_input(update, context)
@@ -162,9 +167,18 @@ async def callback_router(update: Update, context):
         "admin_set_api_bomb_cycles":     admin_bomber_set_field,
         "admin_set_custom_bomb_credits": admin_bomber_set_field,
         "admin_set_custom_bomb_count":   admin_bomber_set_field,
+        "admin_set_credits_per_1000":    admin_bomber_set_field,
         "admin_firebase_add":            admin_firebase_add,
         "admin_firebase_list":           admin_firebase_list,
         "admin_firebase_remove":         admin_firebase_remove,
+        "admin_firebase_bulk_add":       admin_firebase_bulk_add,
+        # Bomber count picker
+        "bomber_count_100":              bomber_count_pick,
+        "bomber_count_500":              bomber_count_pick,
+        "bomber_count_1000":             bomber_count_pick,
+        "bomber_count_5000":             bomber_count_pick,
+        "bomber_count_max":              bomber_count_pick,
+        "bomber_count_custom":           bomber_count_pick,
         # Admin panel
         "admin_panel":               admin_panel,
         "admin_payment_setup":       admin_payment_setup,

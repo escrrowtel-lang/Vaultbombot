@@ -27,12 +27,17 @@ async def get_bomber_settings() -> dict:
     """Load bomber credits/quantity from admin_settings, fall back to defaults."""
     admin = await load_admin_data()
     return {
-        "api_bomb_credits":    admin.get("api_bomb_credits",    BOMBER_CREDITS_DEFAULT["api_bomb"]),
-        "custom_bomb_credits": admin.get("custom_bomb_credits", BOMBER_CREDITS_DEFAULT["custom_bomb"]),
-        "api_bomb_cycles":     admin.get("api_bomb_cycles",     BOMBER_QUANTITY_DEFAULT["api_bomb"]),
-        "custom_bomb_count":   admin.get("custom_bomb_count",   BOMBER_QUANTITY_DEFAULT["custom_bomb"]),
-        "firebase_list":       admin.get("firebase_list",       []),
+        "api_bomb_credits":             admin.get("api_bomb_credits",             BOMBER_CREDITS_DEFAULT["api_bomb"]),
+        "custom_bomb_credits":          admin.get("custom_bomb_credits",          BOMBER_CREDITS_DEFAULT["custom_bomb"]),
+        "custom_bomb_credits_per_1000": admin.get("custom_bomb_credits_per_1000", 5),
+        "api_bomb_cycles":              admin.get("api_bomb_cycles",              BOMBER_QUANTITY_DEFAULT["api_bomb"]),
+        "custom_bomb_count":            admin.get("custom_bomb_count",            BOMBER_QUANTITY_DEFAULT["custom_bomb"]),
+        "firebase_list":                admin.get("firebase_list",                []),
     }
+
+def calc_custom_cost(count: int, credits_per_1000: int) -> int:
+    import math
+    return max(1, math.ceil(count / 1000) * credits_per_1000)
 
 def back_kb(target="menu_main", label="🏠 Main Menu"):
     return InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=target)]])
@@ -174,24 +179,113 @@ async def handle_bomber_phone(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
 
 async def handle_bomber_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Step 2 (custom only): receive message text."""
+    """Step 2 (custom only): receive message text → show count picker."""
     msg = update.message.text.strip()
     if not msg:
         await update.message.reply_text("❌ Message cannot be empty.")
         return
 
     context.user_data["bomber_message"] = msg
-    context.user_data["awaiting"] = "bomber_confirm"
+    context.user_data["awaiting"] = "bomber_count_input"
 
-    phone = context.user_data.get("bomber_phone", "")
     s = await get_bomber_settings()
+    rate = s["custom_bomb_credits_per_1000"]
 
     await update.message.reply_text(
-        f"🎯 <b>Confirm Custom Bomb</b>\n\n"
-        f"📱 Target: <code>{phone}</code>\n"
+        f"✅ <b>Message saved.</b>\n\n"
+        f"📨 <b>How many SMS to send?</b>\n"
+        f"💳 Rate: <code>{rate}</code> credits per 1000 SMS\n\n"
+        f"Pick a preset or tap <b>Custom</b> to enter a number:",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("100",   callback_data="bomber_count_100"),
+                InlineKeyboardButton("500",   callback_data="bomber_count_500"),
+                InlineKeyboardButton("1000",  callback_data="bomber_count_1000"),
+            ],
+            [
+                InlineKeyboardButton("5000",  callback_data="bomber_count_5000"),
+                InlineKeyboardButton("🔥 Max (All Devices)", callback_data="bomber_count_max"),
+            ],
+            [InlineKeyboardButton("✏️ Custom Number", callback_data="bomber_count_custom")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="menu_bomber")],
+        ])
+    )
+
+
+async def bomber_count_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles preset count button presses — show confirm screen."""
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data  # bomber_count_100, bomber_count_max, etc.
+    s = await get_bomber_settings()
+    rate = s["custom_bomb_credits_per_1000"]
+
+    if data == "bomber_count_custom":
+        context.user_data["awaiting"] = "bomber_custom_count_text"
+        await safe_edit(query,
+            f"✏️ <b>Enter custom SMS count:</b>\n\n"
+            f"💳 Rate: <code>{rate}</code> credits per 1000\n\n"
+            f"Type a number (e.g. <code>2500</code>):",
+            InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="menu_bomber")]])
+        )
+        return
+
+    if data == "bomber_count_max":
+        count = None
+        count_label = "MAX (all active devices)"
+        cost = rate  # treat Max as at least 1 unit
+    else:
+        count = int(data.split("_")[-1])
+        count_label = str(count)
+        cost = calc_custom_cost(count, rate)
+
+    context.user_data["bomber_count"] = count
+    phone = context.user_data.get("bomber_phone", "")
+    msg   = context.user_data.get("bomber_message", "")
+
+    await safe_edit(query,
+        f"🎯 <b>Confirm Custom Bomb</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📱 Target:  <code>{phone}</code>\n"
         f"✉️ Message: <i>{msg[:80]}</i>\n"
-        f"📨 Count: <code>{s['custom_bomb_count']}</code>\n"
-        f"💳 Cost: <code>{s['custom_bomb_credits']}</code> credits\n\n",
+        f"📨 Count:   <code>{count_label}</code>\n"
+        f"💳 Cost:    <code>{cost}</code> credits\n\n",
+        InlineKeyboardMarkup([
+            [InlineKeyboardButton("🚀 LAUNCH",  callback_data="bomber_launch_custom")],
+            [InlineKeyboardButton("❌ Cancel",  callback_data="menu_bomber")],
+        ])
+    )
+
+
+async def handle_bomber_custom_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Step 2b: user types a custom count number."""
+    val = update.message.text.strip()
+    try:
+        count = int(val)
+        if count < 1:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text("❌ Enter a valid positive number.")
+        return
+
+    s = await get_bomber_settings()
+    rate = s["custom_bomb_credits_per_1000"]
+    cost = calc_custom_cost(count, rate)
+    context.user_data["bomber_count"] = count
+    context.user_data.pop("awaiting", None)
+
+    phone = context.user_data.get("bomber_phone", "")
+    msg   = context.user_data.get("bomber_message", "")
+
+    await update.message.reply_text(
+        f"🎯 <b>Confirm Custom Bomb</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📱 Target:  <code>{phone}</code>\n"
+        f"✉️ Message: <i>{msg[:80]}</i>\n"
+        f"📨 Count:   <code>{count}</code>\n"
+        f"💳 Cost:    <code>{cost}</code> credits\n\n",
         parse_mode=ParseMode.HTML,
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🚀 LAUNCH",  callback_data="bomber_launch_custom")],
@@ -246,6 +340,8 @@ async def bomber_launch_custom(update: Update, context: ContextTypes.DEFAULT_TYP
     user = query.from_user
     phone   = context.user_data.pop("bomber_phone", None)
     message = context.user_data.pop("bomber_message", None)
+    # count = None means Max (all devices), otherwise integer
+    count   = context.user_data.pop("bomber_count", None)
     context.user_data.pop("awaiting", None)
     context.user_data.pop("bomber_mode", None)
 
@@ -254,16 +350,36 @@ async def bomber_launch_custom(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     s = await get_bomber_settings()
-    cost  = s["custom_bomb_credits"]
-    count = s["custom_bomb_count"]
+    rate    = s["custom_bomb_credits_per_1000"]
     fb_list = s.get("firebase_list", [])
 
-    success = await deduct_credits(user.id, cost, f"Custom Bomb → {phone}")
-    if not success:
-        await safe_edit(query, "❌ Insufficient credits.", back_kb("menu_bomber", "💣 Bomber"))
+    # Calculate cost dynamically
+    if count is None:
+        cost = rate  # Max mode: charge for 1 unit as minimum
+        count_label = "MAX"
+    else:
+        cost = calc_custom_cost(count, rate)
+        count_label = str(count)
+
+    success_deduct = await deduct_credits(user.id, cost, f"Custom Bomb → {phone} × {count_label}")
+    if not success_deduct:
+        await safe_edit(query,
+            f"❌ <b>Insufficient Credits</b>\n\n"
+            f"This bomb costs <code>{cost}</code> credits.\n"
+            f"Buy more credits to continue.",
+            InlineKeyboardMarkup([
+                [InlineKeyboardButton("💳 Buy Credits", callback_data="menu_buy")],
+                [InlineKeyboardButton("⬅️ Back",        callback_data="menu_bomber")],
+            ])
+        )
         return
 
-    await safe_edit(query, f"✉️ <b>Sending...</b>\n\n📱 Target: <code>{phone}</code>\n📨 Messages: <code>{count}</code>\n\n<i>Please wait...</i>")
+    await safe_edit(query,
+        f"✉️ <b>Sending...</b>\n\n"
+        f"📱 Target: <code>{phone}</code>\n"
+        f"📨 Count: <code>{count_label}</code>\n\n"
+        f"<i>Contacting all Firebase instances... please wait.</i>"
+    )
 
     result = await run_custom_bomb(phone, message, count, firebase_list=fb_list)
     u = await __import__('data_manager').get_user(user.id)
@@ -297,20 +413,19 @@ async def admin_bomber_settings(update: Update, context: ContextTypes.DEFAULT_TY
         f"  Credits per run: <code>{s['api_bomb_credits']}</code>\n"
         f"  Cycles per run:  <code>{s['api_bomb_cycles']}</code>\n\n"
         f"✉️ <b>Custom Bomb (Firebase)</b>\n"
-        f"  Credits per run:  <code>{s['custom_bomb_credits']}</code>\n"
-        f"  Messages per run: <code>{s['custom_bomb_count']}</code>\n"
-        f"  Firebase links:   <code>{fb_count}</code> configured\n\n"
+        f"  💰 Credits per 1000 SMS: <code>{s['custom_bomb_credits_per_1000']}</code>\n"
+        f"  Firebase instances:      <code>{fb_count}</code> configured\n\n"
         f"<i>Select what to change:</i>"
     )
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚡ API Credits",          callback_data="admin_set_api_bomb_credits")],
-        [InlineKeyboardButton("🔁 API Cycles",           callback_data="admin_set_api_bomb_cycles")],
-        [InlineKeyboardButton("✉️ Custom Credits",       callback_data="admin_set_custom_bomb_credits")],
-        [InlineKeyboardButton("📨 Custom Count",         callback_data="admin_set_custom_bomb_count")],
-        [InlineKeyboardButton("🔥 Add Firebase",         callback_data="admin_firebase_add")],
-        [InlineKeyboardButton("📋 List Firebase",        callback_data="admin_firebase_list")],
-        [InlineKeyboardButton("🗑️ Remove Firebase",      callback_data="admin_firebase_remove")],
-        [InlineKeyboardButton("⬅️ Back",                 callback_data="admin_panel")],
+        [InlineKeyboardButton("⚡ API Credits",            callback_data="admin_set_api_bomb_credits")],
+        [InlineKeyboardButton("🔁 API Cycles",             callback_data="admin_set_api_bomb_cycles")],
+        [InlineKeyboardButton("💰 Credits per 1000 SMS",   callback_data="admin_set_credits_per_1000")],
+        [InlineKeyboardButton("🔥 Add Firebase",           callback_data="admin_firebase_add")],
+        [InlineKeyboardButton("📦 Bulk Add Firebase",      callback_data="admin_firebase_bulk_add")],
+        [InlineKeyboardButton("📋 List Firebase",          callback_data="admin_firebase_list")],
+        [InlineKeyboardButton("🗑️ Remove Firebase",        callback_data="admin_firebase_remove")],
+        [InlineKeyboardButton("⬅️ Back",                   callback_data="admin_panel")],
     ])
     await safe_edit(query, text, kb)
 
@@ -320,10 +435,11 @@ async def admin_bomber_set_field(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
 
     field_map = {
-        "admin_set_api_bomb_credits":    ("admin_awaiting", "bomber_api_credits",    "⚡ API Bomb credits per run (number):"),
-        "admin_set_api_bomb_cycles":     ("admin_awaiting", "bomber_api_cycles",     "🔁 API Bomb cycles per run (number):"),
-        "admin_set_custom_bomb_credits": ("admin_awaiting", "bomber_custom_credits", "✉️ Custom Bomb credits per run (number):"),
-        "admin_set_custom_bomb_count":   ("admin_awaiting", "bomber_custom_count",   "📨 Custom Bomb message count per run (number):"),
+        "admin_set_api_bomb_credits":    ("admin_awaiting", "bomber_api_credits",       "⚡ API Bomb credits per run (number):"),
+        "admin_set_api_bomb_cycles":     ("admin_awaiting", "bomber_api_cycles",        "🔁 API Bomb cycles per run (number):"),
+        "admin_set_custom_bomb_credits": ("admin_awaiting", "bomber_custom_credits",    "✉️ Custom Bomb credits per run (number):"),
+        "admin_set_custom_bomb_count":   ("admin_awaiting", "bomber_custom_count",      "📨 Custom Bomb message count per run (number):"),
+        "admin_set_credits_per_1000":    ("admin_awaiting", "bomber_credits_per_1000",  "💰 Credits charged per 1000 SMS (number):"),
     }
     if query.data not in field_map:
         return
@@ -332,6 +448,24 @@ async def admin_bomber_set_field(update: Update, context: ContextTypes.DEFAULT_T
     context.user_data[key] = awaiting_val
     await safe_edit(query, f"<b>{prompt}</b>\n\nType the value now:",
         InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_bomber_settings")]]))
+
+
+async def admin_firebase_bulk_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start bulk-add-firebase flow: paste multiple URLs."""
+    query = update.callback_query
+    if not await is_admin(query.from_user.id): return
+    await query.answer()
+    context.user_data["admin_awaiting"] = "firebase_bulk_add_urls"
+    await safe_edit(query,
+        "📦 <b>Bulk Add Firebase</b>\n\n"
+        "Paste <b>multiple Firebase URLs</b>, one per line:\n\n"
+        "<i>Example:</i>\n"
+        "<code>https://project1-default-rtdb.firebaseio.com\n"
+        "https://project2-default-rtdb.firebaseio.com\n"
+        "https://project3-default-rtdb.firebaseio.com</code>\n\n"
+        "<i>All valid URLs will be added automatically with names Server1, Server2…</i>",
+        InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_bomber_settings")]])
+    )
 
 # ─────────────────────────── Firebase Admin Handlers ───────────────────────────
 
@@ -396,10 +530,11 @@ async def handle_admin_bomber_text(update: Update, context: ContextTypes.DEFAULT
 
     # ── Numeric bomber fields ──
     num_field_map = {
-        "bomber_api_credits":    "api_bomb_credits",
-        "bomber_api_cycles":     "api_bomb_cycles",
-        "bomber_custom_credits": "custom_bomb_credits",
-        "bomber_custom_count":   "custom_bomb_count",
+        "bomber_api_credits":      "api_bomb_credits",
+        "bomber_api_cycles":       "api_bomb_cycles",
+        "bomber_custom_credits":   "custom_bomb_credits",
+        "bomber_custom_count":     "custom_bomb_count",
+        "bomber_credits_per_1000": "custom_bomb_credits_per_1000",
     }
     if awaiting in num_field_map:
         db_key = num_field_map[awaiting]
@@ -483,6 +618,40 @@ async def handle_admin_bomber_text(update: Update, context: ContextTypes.DEFAULT
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_bomber_settings")]])
             )
+        return True
+
+    # ── Firebase bulk add flow ──
+    if awaiting == "firebase_bulk_add_urls":
+        context.user_data.pop("admin_awaiting", None)
+        lines = [line.strip().rstrip("/") for line in val.splitlines() if line.strip()]
+        valid_urls = [u for u in lines if u.startswith("http")]
+        invalid_count = len(lines) - len(valid_urls)
+
+        if not valid_urls:
+            await update.message.reply_text(
+                "❌ No valid URLs found. Each URL must start with <code>https://</code>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_bomber_settings")]])
+            )
+            return True
+
+        existing = await list_all_firebase()
+        start_idx = len(existing) + 1
+        added = []
+        for i, url in enumerate(valid_urls):
+            name = f"Server{start_idx + i}"
+            entry = await add_firebase(name, url, "")
+            added.append(f"• <b>{entry['name']}</b> — <code>{entry['id']}</code>")
+
+        summary = "\n".join(added)
+        extra = f"\n⚠️ {invalid_count} invalid URL(s) skipped." if invalid_count else ""
+        await update.message.reply_text(
+            f"✅ <b>Bulk Add Complete!</b>\n\n"
+            f"Added <b>{len(added)}</b> Firebase instance(s):\n\n"
+            f"{summary}{extra}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_bomber_settings")]])
+        )
         return True
 
     return False

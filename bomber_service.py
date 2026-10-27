@@ -176,8 +176,8 @@ async def run_custom_bomb(phone: str, message: str, count: int, firebase_list: l
             'note': 'No Firebase instances configured. Add one via Admin → Bomber Settings.',
         }
 
-    # Build task list (capped by count)
-    tasks = await prepare_firebase_tasks(firebase_list, phone, message, max_success=count)
+    # Build task list — no cap, use ALL active devices across ALL instances
+    tasks = await prepare_firebase_tasks(firebase_list, phone, message, max_success=None)
 
     if not tasks:
         return {
