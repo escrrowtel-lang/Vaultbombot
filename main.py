@@ -261,10 +261,20 @@ async def main():
     ))
 
     logger.info("🛡️ Vault Bot starting...")
-    await asyncio.gather(
-        start_health_server(),
-        app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
-    )
+
+    # Start health server first (non-blocking)
+    await start_health_server()
+
+    # Use manual PTB lifecycle so we control the event loop
+    async with app:
+        await app.start()
+        await app.updater.start_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True
+        )
+        logger.info("🛡️ Vault Bot polling started.")
+        # Keep running until stopped
+        await asyncio.Event().wait()
 
 async def _gated(handler, update: Update, context):
     if not await pre_process(update, context):
@@ -275,15 +285,7 @@ if __name__ == "__main__":
     import sys
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    app_instance = None
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(main())
+        asyncio.run(main())
     except KeyboardInterrupt:
         pass
-    finally:
-        try:
-            loop.close()
-        except Exception:
-            pass
