@@ -213,7 +213,6 @@ async def main():
         Application.builder()
         .token(BOT_TOKEN)
         .defaults(defaults)
-        .concurrent_updates(True)
         .read_timeout(30)
         .connect_timeout(30)
         .build()
@@ -253,4 +252,18 @@ async def _gated(handler, update: Update, context):
     await handler(update, context)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import sys
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    app_instance = None
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(main())
+    except KeyboardInterrupt:
+        pass
+    finally:
+        try:
+            loop.close()
+        except Exception:
+            pass
