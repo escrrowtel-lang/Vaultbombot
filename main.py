@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from aiohttp import web
 from telegram import Update
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
@@ -203,6 +204,22 @@ async def callback_router(update: Update, context):
     else:
         await query.answer("Unknown action.", show_alert=True)
 
+# ─────────────────────────── Health Server ───────────────────────────
+
+async def health_handler(request):
+    return web.Response(text="OK", status=200)
+
+async def start_health_server():
+    port = int(os.environ.get("PORT", 8080))
+    app_web = web.Application()
+    app_web.router.add_get("/", health_handler)
+    app_web.router.add_get("/health", health_handler)
+    runner = web.AppRunner(app_web)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info(f"Health server running on port {port}")
+
 # ─────────────────────────── Main ───────────────────────────
 
 async def main():
@@ -244,7 +261,10 @@ async def main():
     ))
 
     logger.info("🛡️ Vault Bot starting...")
-    await app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    await asyncio.gather(
+        start_health_server(),
+        app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    )
 
 async def _gated(handler, update: Update, context):
     if not await pre_process(update, context):
