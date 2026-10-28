@@ -4,21 +4,22 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 def main_menu_kb():
     return InlineKeyboardMarkup([
+        # Row 1 — Primary action (full width, bold green feel)
+        [InlineKeyboardButton("💣 BOMBER",              callback_data="menu_bomber")],
+        # Row 2 — Credits actions (blue row)
         [
-            InlineKeyboardButton("🔍 LOOKUPS",      callback_data="menu_lookups"),
-            InlineKeyboardButton("💣 BOMBER",       callback_data="menu_bomber"),
+            InlineKeyboardButton("💳 Buy Credits",      callback_data="menu_buy"),
+            InlineKeyboardButton("🎁 Redeem Code",      callback_data="menu_redeem"),
         ],
+        # Row 3 — Profile & social (blue row)
         [
-            InlineKeyboardButton("👤 My Profile",   callback_data="menu_profile"),
-            InlineKeyboardButton("💳 Buy Credits",  callback_data="menu_buy"),
+            InlineKeyboardButton("👤 My Profile",       callback_data="menu_profile"),
+            InlineKeyboardButton("👥 Referral",         callback_data="menu_referral"),
         ],
+        # Row 4 — History & support (olive/dark row)
         [
-            InlineKeyboardButton("🎁 Redeem Code",  callback_data="menu_redeem"),
-            InlineKeyboardButton("👥 Referral",     callback_data="menu_referral"),
-        ],
-        [
-            InlineKeyboardButton("📜 History",      callback_data="menu_history"),
-            InlineKeyboardButton("💬 Support",      callback_data="menu_support"),
+            InlineKeyboardButton("📜 History",          callback_data="menu_history"),
+            InlineKeyboardButton("💬 Support",          callback_data="menu_support"),
         ],
     ])
 

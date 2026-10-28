@@ -9,7 +9,9 @@ services:
         sync: false
       - key: OWNER_ID
         sync: false
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_KEY
-        sync: false
+      - key: DATA_DIR
+        value: /var/data
+    disk:
+      name: vault-bot-data
+      mountPath: /var/data
+      sizeGB: 1

@@ -25,7 +25,21 @@ from config import (
 logger = logging.getLogger(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "data")
+
+# ── Persistent data directory ──────────────────────────────────────────────
+# Priority:
+#   1. DATA_DIR env var (set this on Render → /var/data or your disk mount)
+#   2. /var/data  — Render persistent disk default mount path
+#   3. ./data     — local dev fallback
+_env_data = os.environ.get("DATA_DIR", "").strip()
+if _env_data:
+    DATA_DIR = _env_data
+elif os.path.isdir("/var/data"):
+    DATA_DIR = "/var/data"
+else:
+    DATA_DIR = os.path.join(BASE_DIR, "data")
+
+logger.info(f"[data_manager] DATA_DIR = {DATA_DIR}")
 
 USERS_FILE     = os.path.join(DATA_DIR, "users.json")
 ADMIN_FILE     = os.path.join(DATA_DIR, "admin.json")
