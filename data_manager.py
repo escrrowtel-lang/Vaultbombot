@@ -274,6 +274,13 @@ _ADMIN_DEFAULTS = {
         {"id": "pkg_4", "credits": 1000, "price": 399, "label": "Elite"},
     ],
     "admins": [],
+    # API Bomb quantity ranges — each has label, min_cycles, max_cycles, credits cost
+    "api_bomb_quantity_ranges": [
+        {"id": "range_1", "label": "0–50",    "cycles": 50,   "credits": 3},
+        {"id": "range_2", "label": "100–200",  "cycles": 200,  "credits": 8},
+        {"id": "range_3", "label": "200–500",  "cycles": 500,  "credits": 15},
+        {"id": "range_4", "label": "500–1000", "cycles": 1000, "credits": 25},
+    ],
 }
 
 

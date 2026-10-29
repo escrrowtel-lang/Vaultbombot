@@ -51,17 +51,33 @@ async def menu_bomber(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = await get_user(user.id)
     s = await get_bomber_settings()
 
+    admin = await load_admin_data()
+    ranges = admin.get("api_bomb_quantity_ranges", [
+        {"id": "range_1", "label": "0–50",    "cycles": 50,   "credits": 3},
+        {"id": "range_2", "label": "100–200",  "cycles": 200,  "credits": 8},
+        {"id": "range_3", "label": "200–500",  "cycles": 500,  "credits": 15},
+        {"id": "range_4", "label": "500–1000", "cycles": 1000, "credits": 25},
+    ])
+
+    import bomber_service
+    api_count = len(bomber_service.ULTIMATEAPIS)
+
+    range_lines = "\n".join(
+        f"    {'✅' if u['credits'] >= r['credits'] else '❌'} {r['label']} cycles → <code>{r['credits']}</code> credits"
+        for r in ranges
+    )
+
     text = (
         f"💣 <b>BOMBER</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"💳 Your Credits: <code>{u['credits']}</code>\n\n"
         f"<b>Choose Bomb Type:</b>\n\n"
         f"⚡ <b>API Bomb</b>\n"
-        f"  Hits <b>{len(__import__('bomber_service').ULTIMATEAPIS)}+ OTP endpoints</b> across 25+ Indian apps.\n"
-        f"  Cycles: <code>{s['api_bomb_cycles']}</code> | Cost: <code>{s['api_bomb_credits']}</code> credits\n\n"
+        f"  Hits <b>{api_count}+ OTP endpoints</b> across 25+ Indian apps.\n"
+        f"  Ranges:\n{range_lines}\n\n"
         f"✉️ <b>Custom Message Bomb</b>\n"
-        f"  Sends your custom message <b>{s['custom_bomb_count']}x</b> via SMS gateway.\n"
-        f"  Cost: <code>{s['custom_bomb_credits']}</code> credits"
+        f"  Sends your custom message via SMS gateway.\n"
+        f"  Cost: <code>{s['custom_bomb_credits_per_1000']}</code> credits per 1000 SMS"
     )
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("⚡ API Bomb",             callback_data="bomber_api_start")],
@@ -73,38 +89,93 @@ async def menu_bomber(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─────────────────────────── API Bomb Flow ───────────────────────────
 
 async def bomber_api_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show quantity range picker for API Bomb."""
     query = update.callback_query
     await query.answer()
     user = query.from_user
     u = await get_user(user.id)
-    s = await get_bomber_settings()
-    cost = s["api_bomb_credits"]
 
-    if u["credits"] < cost:
-        text = (
-            f"❌ <b>Insufficient Credits</b>\n\n"
-            f"API Bomb costs <code>{cost}</code> credits.\n"
-            f"Your balance: <code>{u['credits']}</code>\n\n"
-            f"<i>Buy more credits to continue.</i>"
-        )
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("💳 Buy Credits",  callback_data="menu_buy")],
-            [InlineKeyboardButton("🏠 Main Menu",    callback_data="menu_main")],
-        ])
-        await safe_edit(query, text, kb)
-        return
-
-    context.user_data["bomber_mode"] = "api"
-    context.user_data["awaiting"]    = "bomber_phone"
+    admin = await load_admin_data()
+    ranges = admin.get("api_bomb_quantity_ranges", [
+        {"id": "range_1", "label": "0–50",    "cycles": 50,   "credits": 3},
+        {"id": "range_2", "label": "100–200",  "cycles": 200,  "credits": 8},
+        {"id": "range_3", "label": "200–500",  "cycles": 500,  "credits": 15},
+        {"id": "range_4", "label": "500–1000", "cycles": 1000, "credits": 25},
+    ])
 
     text = (
         f"⚡ <b>API BOMB</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"💳 Cost: <code>{cost}</code> credits\n"
-        f"🔁 Cycles: <code>{s['api_bomb_cycles']}</code>\n\n"
-        f"📱 Enter the target phone number (10 digits):"
+        f"💳 Your Credits: <code>{u['credits']}</code>\n\n"
+        f"🔢 <b>Select quantity range:</b>\n"
+        f"<i>Each cycle hits {len(__import__('bomber_service').ULTIMATEAPIS)}+ Indian OTP endpoints</i>\n\n"
     )
-    await safe_edit(query, text, back_kb("menu_bomber", "⬅️ Back"))
+    for r in ranges:
+        text += f"  • <b>{r['label']} cycles</b> → <code>{r['credits']}</code> credits\n"
+
+    kb_rows = []
+    for r in ranges:
+        can_afford = "✅" if u["credits"] >= r["credits"] else "❌"
+        kb_rows.append([InlineKeyboardButton(
+            f"{can_afford} {r['label']} cycles — {r['credits']} credits",
+            callback_data=f"bomber_api_range_{r['id']}"
+        )])
+    kb_rows.append([InlineKeyboardButton("⬅️ Back", callback_data="menu_bomber")])
+
+    await safe_edit(query, text, InlineKeyboardMarkup(kb_rows))
+
+
+async def bomber_api_range_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """User picked a quantity range — check credits, ask for phone."""
+    query = update.callback_query
+    await query.answer()
+    user = query.from_user
+    u = await get_user(user.id)
+
+    range_id = query.data.replace("bomber_api_range_", "")
+    admin = await load_admin_data()
+    ranges = admin.get("api_bomb_quantity_ranges", [
+        {"id": "range_1", "label": "0–50",    "cycles": 50,   "credits": 3},
+        {"id": "range_2", "label": "100–200",  "cycles": 200,  "credits": 8},
+        {"id": "range_3", "label": "200–500",  "cycles": 500,  "credits": 15},
+        {"id": "range_4", "label": "500–1000", "cycles": 1000, "credits": 25},
+    ])
+
+    chosen = next((r for r in ranges if r["id"] == range_id), None)
+    if not chosen:
+        await safe_edit(query, "⚠️ Invalid range. Try again.", back_kb("menu_bomber", "⬅️ Back"))
+        return
+
+    cost   = chosen["credits"]
+    cycles = chosen["cycles"]
+
+    if u["credits"] < cost:
+        await safe_edit(query,
+            f"❌ <b>Insufficient Credits</b>\n\n"
+            f"<b>{chosen['label']} cycles</b> costs <code>{cost}</code> credits.\n"
+            f"Your balance: <code>{u['credits']}</code>\n\n"
+            f"<i>Buy more credits to continue.</i>",
+            InlineKeyboardMarkup([
+                [InlineKeyboardButton("💳 Buy Credits", callback_data="menu_buy")],
+                [InlineKeyboardButton("⬅️ Back",        callback_data="bomber_api_start")],
+            ])
+        )
+        return
+
+    context.user_data["bomber_mode"]        = "api"
+    context.user_data["bomber_api_cycles"]  = cycles
+    context.user_data["bomber_api_cost"]    = cost
+    context.user_data["bomber_api_label"]   = chosen["label"]
+    context.user_data["awaiting"]           = "bomber_phone"
+
+    await safe_edit(query,
+        f"⚡ <b>API BOMB</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🔢 Range:  <b>{chosen['label']} cycles</b>\n"
+        f"💳 Cost:   <code>{cost}</code> credits\n\n"
+        f"📱 Enter the target phone number (10 digits):",
+        back_kb("bomber_api_start", "⬅️ Back")
+    )
 
 async def bomber_custom_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -163,14 +234,16 @@ async def handle_bomber_phone(update: Update, context: ContextTypes.DEFAULT_TYPE
             parse_mode=ParseMode.HTML,
         )
     else:
-        # API mode — go straight to confirm
+        # API mode — show confirm with selected range info
         context.user_data["awaiting"] = "bomber_confirm"
-        s = await get_bomber_settings()
+        cycles = context.user_data.get("bomber_api_cycles", 50)
+        cost   = context.user_data.get("bomber_api_cost",   3)
+        label  = context.user_data.get("bomber_api_label",  "0–50")
         await update.message.reply_text(
             f"🎯 <b>Confirm API Bomb</b>\n\n"
             f"📱 Target: <code>{digits}</code>\n"
-            f"🔁 Cycles: <code>{s['api_bomb_cycles']}</code>\n"
-            f"💳 Cost: <code>{s['api_bomb_credits']}</code> credits\n\n",
+            f"🔢 Range:  <b>{label} cycles</b>\n"
+            f"💳 Cost:   <code>{cost}</code> credits\n\n",
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🚀 LAUNCH",     callback_data="bomber_launch_api")],
@@ -300,24 +373,28 @@ async def bomber_launch_api(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer("Launching...")
 
     user = query.from_user
-    phone = context.user_data.pop("bomber_phone", None)
-    context.user_data.pop("awaiting", None)
+    phone  = context.user_data.pop("bomber_phone",     None)
+    cycles = context.user_data.pop("bomber_api_cycles", 50)
+    cost   = context.user_data.pop("bomber_api_cost",   3)
+    label  = context.user_data.pop("bomber_api_label",  "0–50")
+    context.user_data.pop("awaiting",    None)
     context.user_data.pop("bomber_mode", None)
 
     if not phone:
         await safe_edit(query, "⚠️ Session expired. Start again.", back_kb("menu_bomber", "💣 Bomber"))
         return
 
-    s = await get_bomber_settings()
-    cost = s["api_bomb_credits"]
-    cycles = s["api_bomb_cycles"]
-
-    success = await deduct_credits(user.id, cost, f"API Bomb → {phone}")
+    success = await deduct_credits(user.id, cost, f"API Bomb → {phone} [{label}]")
     if not success:
         await safe_edit(query, "❌ Insufficient credits.", back_kb("menu_bomber", "💣 Bomber"))
         return
 
-    await safe_edit(query, f"⚡ <b>Bombing...</b>\n\n📱 Target: <code>{phone}</code>\n🔁 Cycles: <code>{cycles}</code>\n\n<i>Please wait...</i>")
+    await safe_edit(query,
+        f"⚡ <b>Bombing...</b>\n\n"
+        f"📱 Target: <code>{phone}</code>\n"
+        f"🔢 Range: <b>{label} cycles</b>\n\n"
+        f"<i>Please wait...</i>"
+    )
 
     result = await run_api_bomb(phone, cycles=cycles)
     u = await __import__('data_manager').get_user(user.id)
@@ -326,6 +403,7 @@ async def bomber_launch_api(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ <b>API Bomb Complete!</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n\n"
         f"📱 Target: <code>{result['phone']}</code>\n"
+        f"🔢 Range: <b>{label} cycles</b>\n"
         f"📊 Total Requests: <code>{result['total']}</code>\n"
         f"✅ Successful: <code>{result['success']}</code>\n"
         f"❌ Failed: <code>{result['failed']}</code>\n\n"
@@ -405,29 +483,46 @@ async def admin_bomber_settings(update: Update, context: ContextTypes.DEFAULT_TY
     await query.answer()
 
     s = await get_bomber_settings()
+    admin = await load_admin_data()
+    ranges = admin.get("api_bomb_quantity_ranges", [
+        {"id": "range_1", "label": "0–50",    "cycles": 50,   "credits": 3},
+        {"id": "range_2", "label": "100–200",  "cycles": 200,  "credits": 8},
+        {"id": "range_3", "label": "200–500",  "cycles": 500,  "credits": 15},
+        {"id": "range_4", "label": "500–1000", "cycles": 1000, "credits": 25},
+    ])
     fb_count = len(s.get("firebase_list", []))
+
+    range_lines = "\n".join(
+        f"  • {r['label']} cycles → <code>{r['credits']}</code> credits"
+        for r in ranges
+    )
+
     text = (
         f"💣 <b>BOMBER SETTINGS</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"⚡ <b>API Bomb</b>\n"
-        f"  Credits per run: <code>{s['api_bomb_credits']}</code>\n"
-        f"  Cycles per run:  <code>{s['api_bomb_cycles']}</code>\n\n"
+        f"⚡ <b>API Bomb Ranges</b>\n"
+        f"{range_lines}\n\n"
         f"✉️ <b>Custom Bomb (Firebase)</b>\n"
         f"  💰 Credits per 1000 SMS: <code>{s['custom_bomb_credits_per_1000']}</code>\n"
         f"  Firebase instances:      <code>{fb_count}</code> configured\n\n"
         f"<i>Select what to change:</i>"
     )
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚡ API Credits",            callback_data="admin_set_api_bomb_credits")],
-        [InlineKeyboardButton("🔁 API Cycles",             callback_data="admin_set_api_bomb_cycles")],
+
+    kb_rows = []
+    for r in ranges:
+        kb_rows.append([InlineKeyboardButton(
+            f"✏️ {r['label']} → {r['credits']} credits",
+            callback_data=f"admin_set_range_credits_{r['id']}"
+        )])
+    kb_rows += [
         [InlineKeyboardButton("💰 Credits per 1000 SMS",   callback_data="admin_set_credits_per_1000")],
         [InlineKeyboardButton("🔥 Add Firebase",           callback_data="admin_firebase_add")],
         [InlineKeyboardButton("📦 Bulk Add Firebase",      callback_data="admin_firebase_bulk_add")],
         [InlineKeyboardButton("📋 List Firebase",          callback_data="admin_firebase_list")],
         [InlineKeyboardButton("🗑️ Remove Firebase",        callback_data="admin_firebase_remove")],
         [InlineKeyboardButton("⬅️ Back",                   callback_data="admin_panel")],
-    ])
-    await safe_edit(query, text, kb)
+    ]
+    await safe_edit(query, text, InlineKeyboardMarkup(kb_rows))
 
 async def admin_bomber_set_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -448,6 +543,32 @@ async def admin_bomber_set_field(update: Update, context: ContextTypes.DEFAULT_T
     context.user_data[key] = awaiting_val
     await safe_edit(query, f"<b>{prompt}</b>\n\nType the value now:",
         InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_bomber_settings")]]))
+
+
+async def admin_set_range_credits(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin tapped edit button for a specific range's credit price."""
+    query = update.callback_query
+    if not await is_admin(query.from_user.id): return
+    await query.answer()
+
+    # callback_data = "admin_set_range_credits_range_X"
+    range_id = query.data.replace("admin_set_range_credits_", "")
+    admin = await load_admin_data()
+    ranges = admin.get("api_bomb_quantity_ranges", [])
+    chosen = next((r for r in ranges if r["id"] == range_id), None)
+    if not chosen:
+        await safe_edit(query, "⚠️ Range not found.", back_kb("admin_bomber_settings", "⬅️ Back"))
+        return
+
+    context.user_data["admin_awaiting"]       = "bomber_range_credits"
+    context.user_data["bomber_range_edit_id"] = range_id
+
+    await safe_edit(query,
+        f"✏️ <b>Edit Range: {chosen['label']} cycles</b>\n\n"
+        f"Current price: <code>{chosen['credits']}</code> credits\n\n"
+        f"Enter the <b>new credit price</b> for this range:",
+        InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="admin_bomber_settings")]])
+    )
 
 
 async def admin_firebase_bulk_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -527,6 +648,39 @@ async def handle_admin_bomber_text(update: Update, context: ContextTypes.DEFAULT
 
     awaiting = context.user_data.get("admin_awaiting", "")
     val = update.message.text.strip()
+
+    # ── API Bomb range credit edit ──
+    if awaiting == "bomber_range_credits":
+        range_id = context.user_data.pop("bomber_range_edit_id", None)
+        context.user_data.pop("admin_awaiting", None)
+        try:
+            new_credits = int(val)
+            if new_credits < 0:
+                raise ValueError
+        except ValueError:
+            await update.message.reply_text("❌ Must be a positive number.")
+            return True
+
+        if range_id:
+            admin = await load_admin_data()
+            ranges = admin.get("api_bomb_quantity_ranges", [])
+            updated = False
+            for r in ranges:
+                if r["id"] == range_id:
+                    r["credits"] = new_credits
+                    updated = True
+                    break
+            if updated:
+                await set_admin_setting("api_bomb_quantity_ranges", ranges)
+                chosen = next((r for r in ranges if r["id"] == range_id), {})
+                await update.message.reply_text(
+                    f"✅ Range <b>{chosen.get('label', range_id)}</b> updated to <code>{new_credits}</code> credits.",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="admin_bomber_settings")]])
+                )
+            else:
+                await update.message.reply_text("❌ Range not found.", parse_mode=ParseMode.HTML)
+        return True
 
     # ── Numeric bomber fields ──
     num_field_map = {

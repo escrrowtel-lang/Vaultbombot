@@ -26,12 +26,13 @@ from handlers_payment import (
 )
 from handlers_bomber import (
     menu_bomber, bomber_api_start, bomber_custom_start,
+    bomber_api_range_pick,
     bomber_launch_api, bomber_launch_custom,
     handle_bomber_phone, handle_bomber_message,
     bomber_count_pick, handle_bomber_custom_count,
     admin_bomber_settings, admin_bomber_set_field, handle_admin_bomber_text,
     admin_firebase_add, admin_firebase_list, admin_firebase_remove,
-    admin_firebase_bulk_add,
+    admin_firebase_bulk_add, admin_set_range_credits,
 )
 from handlers_admin import (
     admin_command, admin_panel, admin_payment_setup,
@@ -205,6 +206,10 @@ async def callback_router(update: Update, context):
 
     if data in routes:
         await routes[data](update, context)
+    elif data.startswith("bomber_api_range_"):
+        await bomber_api_range_pick(update, context)
+    elif data.startswith("admin_set_range_credits_"):
+        await admin_set_range_credits(update, context)
     elif data.startswith("lookup_confirm_"):
         await handle_lookup_confirm(update, context)
     elif data.startswith("lookup_"):
