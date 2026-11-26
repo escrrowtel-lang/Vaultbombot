@@ -9,11 +9,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 OWNER_ID = int(os.getenv("OWNER_ID", "123456789"))
 
-# Files
-USER_DATA_FILE   = os.path.join(BASE_DIR, "data", "users.json")
-ADMIN_DATA_FILE  = os.path.join(BASE_DIR, "data", "admin.json")
-PAYMENTS_FILE    = os.path.join(BASE_DIR, "data", "payments.json")
-LOOKUP_DATA_FILE = os.path.join(BASE_DIR, "data", "lookups.json")
+# Supabase
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")  # service_role key (bypasses RLS)
 
 # Credits
 DEFAULT_CREDITS  = 10

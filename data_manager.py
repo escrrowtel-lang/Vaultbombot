@@ -1,187 +1,129 @@
 """
-data_manager.py - JSON file-based storage (no external DB required).
+data_manager.py — Supabase-backed storage layer.
 
-All data stored in /data directory:
-  data/users.json        - user records
-  data/admin.json        - admin settings
-  data/payments.json     - payment records
-  data/redeem_codes.json - redeem codes
-  data/history.json      - credit history
+Drop-in replacement for the JSON file version.
+All public async function signatures are identical — no other file needs changing.
+
+Tables used (run supabase_schema.sql first):
+  users          — user records
+  history        — credit + lookup history
+  admin_settings — key/value JSONB store
+  redeem_codes   — redeem codes
+  payments       — payment records
 """
 
 import json
 import logging
-import os
 import time
-import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from supabase import create_client, Client
 from config import (
+    SUPABASE_URL, SUPABASE_KEY,
     DEFAULT_CREDITS, LOOKUP_COSTS, OWNER_ID,
-    USER_DATA_FILE, ADMIN_DATA_FILE, PAYMENTS_FILE,
 )
 
 logger = logging.getLogger(__name__)
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# ── Persistent data directory ──────────────────────────────────────────────
-# Priority:
-#   1. DATA_DIR env var (set this on Render → /var/data or your disk mount)
-#   2. /var/data  — Render persistent disk default mount path
-#   3. ./data     — local dev fallback
-_env_data = os.environ.get("DATA_DIR", "").strip()
-if _env_data:
-    DATA_DIR = _env_data
-elif os.path.isdir("/var/data"):
-    DATA_DIR = "/var/data"
-else:
-    DATA_DIR = os.path.join(BASE_DIR, "data")
-
-logger.info(f"[data_manager] DATA_DIR = {DATA_DIR}")
-
-USERS_FILE     = os.path.join(DATA_DIR, "users.json")
-ADMIN_FILE     = os.path.join(DATA_DIR, "admin.json")
-PAYMENTS_FILE_ = os.path.join(DATA_DIR, "payments.json")
-REDEEM_FILE    = os.path.join(DATA_DIR, "redeem_codes.json")
-HISTORY_FILE   = os.path.join(DATA_DIR, "history.json")
-
-_lock = asyncio.Lock()
+# ── Supabase client (module-level singleton) ───────────────────────────────
+_sb: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-def _ensure_data_dir():
-    os.makedirs(DATA_DIR, exist_ok=True)
-
-
-def _read_json(path: str, default):
-    _ensure_data_dir()
-    if not os.path.exists(path):
-        return default
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        logger.error(f"Read error {path}: {e}")
-        return default
-
-
-def _write_json(path: str, data):
-    _ensure_data_dir()
-    tmp = path + ".tmp"
-    try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False, default=str)
-        os.replace(tmp, path)
-    except Exception as e:
-        logger.error(f"Write error {path}: {e}")
-
+# ── Helpers ────────────────────────────────────────────────────────────────
 
 def get_ist_now() -> datetime:
     return datetime.now(timezone(timedelta(hours=5, minutes=30)))
 
-
 def _now_iso() -> str:
     return get_ist_now().isoformat()
 
-
-# Users
-
-def _load_users() -> dict:
-    return _read_json(USERS_FILE, {})
+def _row_or_none(res) -> Optional[dict]:
+    """Return first row of a supabase response, or None."""
+    return res.data[0] if res.data else None
 
 
-def _save_users(users: dict):
-    _write_json(USERS_FILE, users)
-
+# ── Users ──────────────────────────────────────────────────────────────────
 
 async def get_user(user_id: int, username: str = "", full_name: str = "") -> dict:
-    async with _lock:
-        users = _load_users()
-        uid = str(user_id)
-        if uid in users:
-            u = users[uid]
-            u["last_seen"] = _now_iso()
-            if username:
-                u["username"] = username
-            if full_name:
-                u["full_name"] = full_name
-            _save_users(users)
-            return u
-        row = {
-            "user_id":        user_id,
-            "username":       username,
-            "full_name":      full_name,
-            "credits":        DEFAULT_CREDITS,
-            "total_earned":   DEFAULT_CREDITS,
-            "total_spent":    0,
-            "lookups_done":   0,
-            "referral_code":  f"REF{user_id}",
-            "referred_by":    None,
-            "referral_count": 0,
-            "is_banned":      False,
-            "joined_at":      _now_iso(),
-            "last_seen":      _now_iso(),
-        }
-        users[uid] = row
-        _save_users(users)
-        return row
+    res = _sb.table("users").select("*").eq("user_id", user_id).execute()
+    if res.data:
+        u = res.data[0]
+        updates: dict = {"last_seen": _now_iso()}
+        if username:
+            updates["username"] = username
+        if full_name:
+            updates["full_name"] = full_name
+        _sb.table("users").update(updates).eq("user_id", user_id).execute()
+        u.update(updates)
+        return u
+
+    # New user — insert
+    row = {
+        "user_id":        user_id,
+        "username":       username,
+        "full_name":      full_name,
+        "credits":        DEFAULT_CREDITS,
+        "total_earned":   DEFAULT_CREDITS,
+        "total_spent":    0,
+        "lookups_done":   0,
+        "referral_code":  f"REF{user_id}",
+        "referred_by":    None,
+        "referral_count": 0,
+        "is_banned":      False,
+        "joined_at":      _now_iso(),
+        "last_seen":      _now_iso(),
+    }
+    _sb.table("users").insert(row).execute()
+    return row
 
 
 async def get_all_users() -> list:
-    return list(_load_users().values())
+    res = _sb.table("users").select("*").execute()
+    return res.data or []
 
 
 async def update_user(user_id: int, updates: dict):
-    async with _lock:
-        users = _load_users()
-        uid = str(user_id)
-        if uid in users:
-            users[uid].update(updates)
-            _save_users(users)
+    _sb.table("users").update(updates).eq("user_id", user_id).execute()
 
 
-async def add_credits(user_id: int, amount: int, reason: str = ""):
-    async with _lock:
-        users = _load_users()
-        uid = str(user_id)
-        if uid not in users:
-            return False
-        users[uid]["credits"]      += amount
-        users[uid]["total_earned"] += amount
-        _save_users(users)
+async def add_credits(user_id: int, amount: int, reason: str = "") -> bool:
+    res = _sb.table("users").select("credits, total_earned").eq("user_id", user_id).execute()
+    if not res.data:
+        return False
+    row = res.data[0]
+    _sb.table("users").update({
+        "credits":      row["credits"] + amount,
+        "total_earned": row["total_earned"] + amount,
+    }).eq("user_id", user_id).execute()
     if reason:
         await _add_history(user_id, "credit", amount, reason)
     return True
 
 
 async def deduct_credits(user_id: int, amount: int, reason: str = "") -> bool:
-    async with _lock:
-        users = _load_users()
-        uid = str(user_id)
-        if uid not in users:
-            return False
-        u = users[uid]
-        if u["credits"] < amount:
-            return False
-        u["credits"]      -= amount
-        u["total_spent"]  += amount
-        u["lookups_done"] += 1
-        _save_users(users)
+    # Fetch current credits + totals atomically
+    res = _sb.table("users").select("credits, total_spent, lookups_done").eq("user_id", user_id).execute()
+    if not res.data:
+        return False
+    row = res.data[0]
+    if row["credits"] < amount:
+        return False
+
+    _sb.table("users").update({
+        "credits":      row["credits"] - amount,
+        "total_spent":  row["total_spent"] + amount,
+        "lookups_done": row["lookups_done"] + 1,
+    }).eq("user_id", user_id).execute()
+
     if reason:
         await _add_history(user_id, "debit", amount, reason)
     return True
 
 
 async def set_user_credits(user_id: int, amount: int) -> bool:
-    async with _lock:
-        users = _load_users()
-        uid = str(user_id)
-        if uid not in users:
-            return False
-        users[uid]["credits"] = amount
-        _save_users(users)
-    return True
+    res = _sb.table("users").update({"credits": amount}).eq("user_id", user_id).execute()
+    return bool(res.data)
 
 
 async def ban_user(user_id: int):
@@ -194,63 +136,65 @@ async def unban_user(user_id: int):
 
 async def apply_referral(new_user_id: int, referral_code: str) -> bool:
     from config import REFERRAL_CREDITS, REFERRED_CREDITS
-    async with _lock:
-        users = _load_users()
-        referrer_uid = None
-        referrer = None
-        for uid, u in users.items():
-            if u.get("referral_code") == referral_code:
-                referrer_uid = uid
-                referrer = u
-                break
-        if not referrer:
-            return False
-        if referrer["user_id"] == new_user_id:
-            return False
-        new_uid = str(new_user_id)
-        if new_uid not in users:
-            return False
-        if users[new_uid].get("referred_by"):
-            return False
-        users[new_uid]["referred_by"]    = referrer["user_id"]
-        users[new_uid]["credits"]        += REFERRED_CREDITS
-        users[new_uid]["total_earned"]   += REFERRED_CREDITS
-        users[referrer_uid]["credits"]      += REFERRAL_CREDITS
-        users[referrer_uid]["total_earned"] += REFERRAL_CREDITS
-        users[referrer_uid]["referral_count"] = users[referrer_uid].get("referral_count", 0) + 1
-        _save_users(users)
+
+    # Find referrer
+    res = _sb.table("users").select("*").eq("referral_code", referral_code).execute()
+    if not res.data:
+        return False
+    referrer = res.data[0]
+    if referrer["user_id"] == new_user_id:
+        return False
+
+    # Check new user exists and hasn't been referred already
+    res2 = _sb.table("users").select("referred_by").eq("user_id", new_user_id).execute()
+    if not res2.data or res2.data[0].get("referred_by"):
+        return False
+
+    # Update new user
+    _sb.table("users").update({
+        "referred_by":  referrer["user_id"],
+        "credits":      _get_field(new_user_id, "credits") + REFERRED_CREDITS,
+        "total_earned": _get_field(new_user_id, "total_earned") + REFERRED_CREDITS,
+    }).eq("user_id", new_user_id).execute()
+
+    # Update referrer
+    _sb.table("users").update({
+        "credits":        referrer["credits"] + REFERRAL_CREDITS,
+        "total_earned":   referrer["total_earned"] + REFERRAL_CREDITS,
+        "referral_count": referrer["referral_count"] + 1,
+    }).eq("user_id", referrer["user_id"]).execute()
+
     return True
 
 
-# History
+def _get_field(user_id: int, field: str):
+    """Sync helper to fetch a single field for in-function arithmetic."""
+    res = _sb.table("users").select(field).eq("user_id", user_id).execute()
+    return res.data[0][field] if res.data else 0
 
-def _load_history() -> list:
-    return _read_json(HISTORY_FILE, [])
 
-
-def _save_history(history: list):
-    _write_json(HISTORY_FILE, history)
-
+# ── History ────────────────────────────────────────────────────────────────
 
 async def _add_history(user_id: int, entry_type: str, amount: int, reason: str):
-    async with _lock:
-        history = _load_history()
-        history.append({
-            "user_id":    user_id,
-            "type":       entry_type,
-            "amount":     amount,
-            "reason":     reason,
-            "created_at": _now_iso(),
-        })
-        if len(history) > 10000:
-            history = history[-10000:]
-        _save_history(history)
+    _sb.table("history").insert({
+        "user_id":    user_id,
+        "type":       entry_type,
+        "amount":     amount,
+        "reason":     reason,
+        "created_at": _now_iso(),
+    }).execute()
 
 
 async def get_user_history(user_id: int, limit: int = 15) -> list:
-    history = _load_history()
-    user_hist = [h for h in history if h.get("user_id") == user_id]
-    return list(reversed(user_hist[-limit:]))
+    res = (
+        _sb.table("history")
+        .select("*")
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return res.data or []
 
 
 async def add_lookup_history(user_id: int, lookup_type: str, query: str, result_summary: str):
@@ -259,7 +203,7 @@ async def add_lookup_history(user_id: int, lookup_type: str, query: str, result_
                        f"{lookup_type}:{query} -> {result_summary[:80]}")
 
 
-# Admin Settings
+# ── Admin Settings ─────────────────────────────────────────────────────────
 
 _ADMIN_DEFAULTS = {
     "payment_group_id": None,
@@ -274,7 +218,6 @@ _ADMIN_DEFAULTS = {
         {"id": "pkg_4", "credits": 1000, "price": 399, "label": "Elite"},
     ],
     "admins": [],
-    # API Bomb quantity ranges — each has label, min_cycles, max_cycles, credits cost
     "api_bomb_quantity_ranges": [
         {"id": "range_1", "label": "0–50",    "cycles": 50,   "credits": 3},
         {"id": "range_2", "label": "100–200",  "cycles": 200,  "credits": 8},
@@ -284,170 +227,138 @@ _ADMIN_DEFAULTS = {
 }
 
 
-def _load_admin() -> dict:
-    stored = _read_json(ADMIN_FILE, {})
-    data = dict(_ADMIN_DEFAULTS)
-    data.update(stored)
-    return data
+def _load_all_admin_settings() -> dict:
+    """Fetch all rows from admin_settings and merge with defaults."""
+    res = _sb.table("admin_settings").select("key, value").execute()
+    merged = dict(_ADMIN_DEFAULTS)
+    for row in (res.data or []):
+        merged[row["key"]] = row["value"]
+    return merged
 
 
-def _save_admin(data: dict):
-    _write_json(ADMIN_FILE, data)
+def _upsert_admin_setting(key: str, value):
+    """Insert or update a single key in admin_settings."""
+    _sb.table("admin_settings").upsert({
+        "key":   key,
+        "value": value,
+    }, on_conflict="key").execute()
 
 
 async def load_admin_data() -> dict:
-    return _load_admin()
+    return _load_all_admin_settings()
 
 
 async def set_admin_setting(key: str, value):
-    async with _lock:
-        data = _load_admin()
-        data[key] = value
-        _save_admin(data)
+    _upsert_admin_setting(key, value)
 
 
 async def save_admin_data(data: dict):
-    async with _lock:
-        current = _load_admin()
-        current.update(data)
-        _save_admin(current)
+    for key, value in data.items():
+        _upsert_admin_setting(key, value)
 
 
 async def get_admin_setting(key: str):
-    d = _load_admin()
-    return d.get(key)
+    res = _sb.table("admin_settings").select("value").eq("key", key).execute()
+    if res.data:
+        return res.data[0]["value"]
+    return _ADMIN_DEFAULTS.get(key)
 
 
 async def is_admin(user_id: int) -> bool:
     if user_id == OWNER_ID:
         return True
-    d = _load_admin()
-    return user_id in d.get("admins", [])
+    admins = await get_admin_setting("admins") or []
+    return user_id in admins
 
 
 async def add_admin(user_id: int):
-    async with _lock:
-        data = _load_admin()
-        admins = data.get("admins", [])
-        if user_id not in admins:
-            admins.append(user_id)
-        data["admins"] = admins
-        _save_admin(data)
+    admins = await get_admin_setting("admins") or []
+    if user_id not in admins:
+        admins.append(user_id)
+    _upsert_admin_setting("admins", admins)
 
 
 async def remove_admin(user_id: int):
-    async with _lock:
-        data = _load_admin()
-        data["admins"] = [a for a in data.get("admins", []) if a != user_id]
-        _save_admin(data)
+    admins = await get_admin_setting("admins") or []
+    admins = [a for a in admins if a != user_id]
+    _upsert_admin_setting("admins", admins)
 
 
-# Redeem Codes
-
-def _load_redeem() -> dict:
-    return _read_json(REDEEM_FILE, {})
-
-
-def _save_redeem(codes: dict):
-    _write_json(REDEEM_FILE, codes)
-
+# ── Redeem Codes ───────────────────────────────────────────────────────────
 
 async def create_redeem_code(code: str, credits: int, max_uses: int = 1):
-    async with _lock:
-        codes = _load_redeem()
-        codes[code.upper()] = {
-            "code":     code.upper(),
-            "credits":  credits,
-            "uses":     0,
-            "max_uses": max_uses,
-        }
-        _save_redeem(codes)
+    _sb.table("redeem_codes").upsert({
+        "code":     code.upper(),
+        "credits":  credits,
+        "uses":     0,
+        "max_uses": max_uses,
+    }, on_conflict="code").execute()
 
 
 async def delete_redeem_code(code: str):
-    async with _lock:
-        codes = _load_redeem()
-        codes.pop(code.upper(), None)
-        _save_redeem(codes)
+    _sb.table("redeem_codes").delete().eq("code", code.upper()).execute()
 
 
 async def use_redeem_code(code: str) -> Optional[int]:
-    async with _lock:
-        codes = _load_redeem()
-        rc = codes.get(code.upper())
-        if not rc:
-            return None
-        if rc["uses"] >= rc["max_uses"]:
-            return None
-        rc["uses"] += 1
-        codes[code.upper()] = rc
-        _save_redeem(codes)
+    res = _sb.table("redeem_codes").select("*").eq("code", code.upper()).execute()
+    if not res.data:
+        return None
+    rc = res.data[0]
+    if rc["uses"] >= rc["max_uses"]:
+        return None
+    # Atomic increment
+    _sb.table("redeem_codes").update({"uses": rc["uses"] + 1}).eq("code", code.upper()).execute()
     return rc["credits"]
 
 
 async def list_redeem_codes() -> list:
-    return list(_load_redeem().values())
+    res = _sb.table("redeem_codes").select("*").execute()
+    return res.data or []
 
 
-# Payments
-
-def _load_payments() -> dict:
-    return _read_json(PAYMENTS_FILE_, {})
-
-
-def _save_payments(payments: dict):
-    _write_json(PAYMENTS_FILE_, payments)
-
+# ── Payments ───────────────────────────────────────────────────────────────
 
 async def create_payment(user_id: int, pkg_id: str, credits: int, price: int, pkg_label: str) -> str:
     pay_id = f"PAY{user_id}{int(time.time())}"
-    async with _lock:
-        payments = _load_payments()
-        payments[pay_id] = {
-            "pay_id":     pay_id,
-            "user_id":    user_id,
-            "pkg_id":     pkg_id,
-            "pkg_label":  pkg_label,
-            "credits":    credits,
-            "price":      price,
-            "utr":        None,
-            "screenshot": None,
-            "status":     "pending",
-            "created_at": _now_iso(),
-            "updated_at": _now_iso(),
-        }
-        _save_payments(payments)
+    _sb.table("payments").insert({
+        "pay_id":     pay_id,
+        "user_id":    user_id,
+        "pkg_id":     pkg_id,
+        "pkg_label":  pkg_label,
+        "credits":    credits,
+        "price":      price,
+        "utr":        None,
+        "screenshot": None,
+        "status":     "pending",
+        "created_at": _now_iso(),
+        "updated_at": _now_iso(),
+    }).execute()
     return pay_id
 
 
 async def update_payment(pay_id: str, updates: dict):
-    async with _lock:
-        payments = _load_payments()
-        if pay_id in payments:
-            updates["updated_at"] = _now_iso()
-            payments[pay_id].update(updates)
-            _save_payments(payments)
+    updates["updated_at"] = _now_iso()
+    _sb.table("payments").update(updates).eq("pay_id", pay_id).execute()
 
 
 async def get_payment(pay_id: str) -> Optional[dict]:
-    return _load_payments().get(pay_id)
+    res = _sb.table("payments").select("*").eq("pay_id", pay_id).execute()
+    return res.data[0] if res.data else None
 
 
 async def get_pending_payments() -> list:
-    return [p for p in _load_payments().values() if p.get("status") == "pending"]
+    res = _sb.table("payments").select("*").eq("status", "pending").execute()
+    return res.data or []
 
-# ─────────────────────────── Firebase Instances ───────────────────────────
+
+# ── Firebase Instances (stored in admin_settings) ──────────────────────────
 
 async def list_all_firebase() -> list:
-    """Return all firebase instances stored in admin_settings."""
-    d = await load_admin_data()
-    return d.get("firebase_list", [])
+    return await get_admin_setting("firebase_list") or []
+
 
 async def add_firebase(name: str, url: str, password: str = "") -> dict:
-    """Add a new firebase instance. Returns the new entry."""
-    import time
-    d = await load_admin_data()
-    fb_list = d.get("firebase_list", [])
+    fb_list = await list_all_firebase()
     entry = {
         "id":       f"fb_{int(time.time())}",
         "name":     name.strip(),
@@ -455,15 +366,14 @@ async def add_firebase(name: str, url: str, password: str = "") -> dict:
         "password": password.strip(),
     }
     fb_list.append(entry)
-    await set_admin_setting("firebase_list", fb_list)
+    _upsert_admin_setting("firebase_list", fb_list)
     return entry
 
+
 async def remove_firebase(fb_id: str) -> bool:
-    """Remove firebase instance by id. Returns True if removed."""
-    d = await load_admin_data()
-    fb_list = d.get("firebase_list", [])
+    fb_list = await list_all_firebase()
     new_list = [f for f in fb_list if f["id"] != fb_id]
     if len(new_list) == len(fb_list):
         return False
-    await set_admin_setting("firebase_list", new_list)
+    _upsert_admin_setting("firebase_list", new_list)
     return True
