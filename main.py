@@ -55,27 +55,31 @@ logger = logging.getLogger(__name__)
 
 async def pre_process(update: Update, context):
     """Check ban status and maintenance mode before processing."""
-    user = update.effective_user
-    if not user:
-        return True
-    u = await get_user(user.id, user.username or "", user.full_name)
-    if u.get("is_banned"):
-        if update.message:
-            await update.message.reply_text("🚫 You are banned from using this bot.")
-        elif update.callback_query:
-            await update.callback_query.answer("🚫 You are banned.", show_alert=True)
-        return False
-
-    admin_data = await load_admin_data()
-    if admin_data.get("maintenance"):
-        from data_manager import is_admin
-        if not await is_admin(user.id):
+    try:
+        user = update.effective_user
+        if not user:
+            return True
+        u = await get_user(user.id, user.username or "", user.full_name)
+        if u.get("is_banned"):
             if update.message:
-                await update.message.reply_text("🔧 Bot is under maintenance. Please check back later.")
+                await update.message.reply_text("🚫 You are banned from using this bot.")
             elif update.callback_query:
-                await update.callback_query.answer("🔧 Maintenance mode.", show_alert=True)
+                await update.callback_query.answer("🚫 You are banned.", show_alert=True)
             return False
-    return True
+
+        admin_data = await load_admin_data()
+        if admin_data.get("maintenance"):
+            from data_manager import is_admin
+            if not await is_admin(user.id):
+                if update.message:
+                    await update.message.reply_text("🔧 Bot is under maintenance. Please check back later.")
+                elif update.callback_query:
+                    await update.callback_query.answer("🔧 Maintenance mode.", show_alert=True)
+                return False
+        return True
+    except Exception as e:
+        logger.error(f"pre_process error: {e}")
+        return True  # Allow the update through — don't crash the bot
 
 # ─────────────────────────── Text Input Router ───────────────────────────
 

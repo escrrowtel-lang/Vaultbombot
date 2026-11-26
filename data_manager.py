@@ -46,36 +46,55 @@ def _row_or_none(res) -> Optional[dict]:
 # ── Users ──────────────────────────────────────────────────────────────────
 
 async def get_user(user_id: int, username: str = "", full_name: str = "") -> dict:
-    res = _sb.table("users").select("*").eq("user_id", user_id).execute()
-    if res.data:
-        u = res.data[0]
-        updates: dict = {"last_seen": _now_iso()}
-        if username:
-            updates["username"] = username
-        if full_name:
-            updates["full_name"] = full_name
-        _sb.table("users").update(updates).eq("user_id", user_id).execute()
-        u.update(updates)
-        return u
+    try:
+        res = _sb.table("users").select("*").eq("user_id", user_id).execute()
+        if res.data:
+            u = res.data[0]
+            updates: dict = {"last_seen": _now_iso()}
+            if username:
+                updates["username"] = username
+            if full_name:
+                updates["full_name"] = full_name
+            _sb.table("users").update(updates).eq("user_id", user_id).execute()
+            u.update(updates)
+            return u
 
-    # New user — insert
-    row = {
-        "user_id":        user_id,
-        "username":       username,
-        "full_name":      full_name,
-        "credits":        DEFAULT_CREDITS,
-        "total_earned":   DEFAULT_CREDITS,
-        "total_spent":    0,
-        "lookups_done":   0,
-        "referral_code":  f"REF{user_id}",
-        "referred_by":    None,
-        "referral_count": 0,
-        "is_banned":      False,
-        "joined_at":      _now_iso(),
-        "last_seen":      _now_iso(),
-    }
-    _sb.table("users").insert(row).execute()
-    return row
+        # New user — insert
+        row = {
+            "user_id":        user_id,
+            "username":       username,
+            "full_name":      full_name,
+            "credits":        DEFAULT_CREDITS,
+            "total_earned":   DEFAULT_CREDITS,
+            "total_spent":    0,
+            "lookups_done":   0,
+            "referral_code":  f"REF{user_id}",
+            "referred_by":    None,
+            "referral_count": 0,
+            "is_banned":      False,
+            "joined_at":      _now_iso(),
+            "last_seen":      _now_iso(),
+        }
+        _sb.table("users").insert(row).execute()
+        return row
+    except Exception as e:
+        logger.error(f"get_user error (Supabase may not be set up): {e}")
+        # Return a safe default so the bot doesn't crash — tables may not exist yet
+        return {
+            "user_id":        user_id,
+            "username":       username,
+            "full_name":      full_name,
+            "credits":        DEFAULT_CREDITS,
+            "total_earned":   DEFAULT_CREDITS,
+            "total_spent":    0,
+            "lookups_done":   0,
+            "referral_code":  f"REF{user_id}",
+            "referred_by":    None,
+            "referral_count": 0,
+            "is_banned":      False,
+            "joined_at":      _now_iso(),
+            "last_seen":      _now_iso(),
+        }
 
 
 async def get_all_users() -> list:
@@ -245,7 +264,11 @@ def _upsert_admin_setting(key: str, value):
 
 
 async def load_admin_data() -> dict:
-    return _load_all_admin_settings()
+    try:
+        return _load_all_admin_settings()
+    except Exception as e:
+        logger.error(f"load_admin_data error (Supabase may not be set up): {e}")
+        return dict(_ADMIN_DEFAULTS)
 
 
 async def set_admin_setting(key: str, value):
